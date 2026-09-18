@@ -27,6 +27,15 @@
       <File>src/path/to/file.ts</File>
       <Glob>tests/**/*.test.ts</Glob>
     </ObservedWriteScope>
+    <!-- Optional. Declare only when the project asks review to amend a corpus it
+         owns, such as design rules or invariants. Same File/Path/Glob/None grammar
+         as ObservedWriteScope. Writes inside it count as explained drift; it never
+         authorizes editing the approved spec.xml or plan.xml, and it is never used
+         to block parallel execution. Omit the section when review amends nothing.
+    <ReviewScope>
+      <Glob>.grace/design-rules/**</Glob>
+    </ReviewScope>
+    -->
     <ImplementationPlan>
       <T-001>
         <Title>$TASK_TITLE</Title>

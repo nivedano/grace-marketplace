@@ -34,7 +34,7 @@ Wait for explicit `sequential` or `parallel-safe` choice. Parallel-safe requires
 1. Run the selected baseline before implementation, including explicit `--run-commands` when its assertions declare `MustPassCommand`.
 2. Execute one dependency-ready task or one verified parallel-safe batch at a time.
 3. Run each task's acceptance and verification immediately.
-4. Apply approved durable context, graph, and verification changes centrally.
+4. Apply approved durable context, graph, and verification changes centrally. Writes a reviewer makes inside the plan's declared `ReviewScope` are applied the same way, count as explained drift, and never widen the observed write scope.
 5. Reconcile durable state, run leaf plan gates, then run selected `--assertions final` as the outermost lifecycle gate, including `--run-commands` when `MustPassCommand` is declared. Final mode performs full project lint, evaluates the selected target, keeps unrelated approved baselines active, and does not re-evaluate the selected plan's superseded baseline.
 6. Ask for explicit apply confirmation after fresh end-state evidence passes.
 7. Only then set spec and plan to `applied` and archive the complete bundle.

@@ -408,6 +408,11 @@ function activeScopeExplainsFile(root: string, scope: ActiveChangeScope, file: s
   if (trackedChangedFiles.has(file) && (file === `${bundlePath}/spec.xml` || file === `${bundlePath}/plan.xml`)) {
     return false;
   }
+  // Checked after the immutability guard so a broad review scope can never explain
+  // an edit to the approved spec or plan it is declared in.
+  if (observedWriteScopeContains(scope.reviewWrites, file)) {
+    return true;
+  }
   if (file === bundlePath || file.startsWith(`${bundlePath}/`)) {
     return true;
   }

@@ -47,6 +47,7 @@ export type ActiveChangeScope = {
   planStatus?: string;
   durable: DurableScope;
   observedWrites: ObservedWriteScope;
+  reviewWrites: ObservedWriteScope;
   issues: Grace4Issue[];
 };
 
@@ -57,6 +58,35 @@ const EMPTY_OWNERSHIP: DurableOwnershipIndex = {
 
 const CONTEXT_ARTIFACT_NAMES = new Set<string>(GRACE4_CONTEXT_ARTIFACTS);
 const CONTEXT_SCOPE_TAGS = new Set(["ContextArtifact", "Context", "Artifact"]);
+
+/**
+ * One project-relative path scope section. ObservedWriteScope declares where the
+ * change itself writes; ReviewScope declares the corpus a reviewer may amend.
+ * Both share the File/Path/Glob/None grammar and the same containment helper.
+ */
+type PathScopeDefinition = {
+  tag: string;
+  invalidShapeCode: string;
+  emptyScopeCode: string;
+  entryLabel: string;
+  pathLabel: string;
+};
+
+const OBSERVED_WRITE_SCOPE: PathScopeDefinition = {
+  tag: "ObservedWriteScope",
+  invalidShapeCode: "scope.invalid-observed-shape",
+  emptyScopeCode: "scope.empty-observed-write-scope",
+  entryLabel: "observed write",
+  pathLabel: "Observed write path",
+};
+
+const REVIEW_SCOPE: PathScopeDefinition = {
+  tag: "ReviewScope",
+  invalidShapeCode: "scope.invalid-review-shape",
+  emptyScopeCode: "scope.empty-review-scope",
+  entryLabel: "review",
+  pathLabel: "Review scope path",
+};
 
 type DurableAnchorArray = "graphAnchors" | "verificationAnchors" | "graphDocuments" | "verificationDocuments";
 
@@ -269,7 +299,8 @@ function readActiveChangeScope(paths: Grace4ProjectPaths, bundlePath: string, ch
   }
 
   const durable = extractDurableScope(plan.root, planFile);
-  const observed = extractObservedWriteScope(plan.root, paths.root, planFile);
+  const observed = extractPathScope(plan.root, paths.root, planFile, OBSERVED_WRITE_SCOPE);
+  const review = extractPathScope(plan.root, paths.root, planFile, REVIEW_SCOPE);
   return {
     changeId,
     bundlePath,
@@ -277,7 +308,8 @@ function readActiveChangeScope(paths: Grace4ProjectPaths, bundlePath: string, ch
     planStatus,
     durable: durable.scope,
     observedWrites: observed.scope,
-    issues: [...durable.issues, ...observed.issues],
+    reviewWrites: review.scope,
+    issues: [...durable.issues, ...observed.issues, ...review.issues],
   };
 }
 
@@ -383,12 +415,14 @@ function extractDurableScope(root: GraceXmlNode, planFile: string): { scope: Dur
   return { scope: dedupeDurableScope(scope), issues };
 }
 
-function extractObservedWriteScope(
+/** Parses one File/Path/Glob/None path scope section into normalized project-relative entries. */
+function extractPathScope(
   root: GraceXmlNode,
   projectRoot: string,
   planFile: string,
+  definition: PathScopeDefinition,
 ): { scope: ObservedWriteScope; issues: Grace4Issue[] } {
-  const scopeNode = [...walkNodes(root)].find((node) => node.tag === "ObservedWriteScope");
+  const scopeNode = [...walkNodes(root)].find((node) => node.tag === definition.tag);
   const scope: ObservedWriteScope = { files: [], globs: [] };
   const issues: Grace4Issue[] = [];
   if (!scopeNode) {
@@ -396,7 +430,7 @@ function extractObservedWriteScope(
   }
 
   if (scopeNode.text.trim() || Object.keys(scopeNode.attributes).length > 0) {
-    issues.push(issue("error", "scope.invalid-observed-shape", planFile, "ObservedWriteScope must contain only File, Path, Glob, or None elements."));
+    issues.push(issue("error", definition.invalidShapeCode, planFile, `${definition.tag} must contain only File, Path, Glob, or None elements.`));
   }
 
   const fileValues: string[] = [];
@@ -405,17 +439,17 @@ function extractObservedWriteScope(
   for (const child of scopeNode.children) {
     if (child.tag === "None") {
       if (child.text.trim() || child.children.length > 0 || Object.keys(child.attributes).length > 0) {
-        issues.push(issue("error", "scope.invalid-observed-shape", planFile, "ObservedWriteScope/None must be an empty attribute-free element."));
+        issues.push(issue("error", definition.invalidShapeCode, planFile, `${definition.tag}/None must be an empty attribute-free element.`));
       }
       hasNone = true;
       continue;
     }
     if (!["File", "Path", "Glob"].includes(child.tag)) {
-      issues.push(issue("error", "scope.invalid-observed-shape", planFile, `ObservedWriteScope does not allow child <${child.tag}>.`));
+      issues.push(issue("error", definition.invalidShapeCode, planFile, `${definition.tag} does not allow child <${child.tag}>.`));
       continue;
     }
     if (child.children.length > 0 || Object.keys(child.attributes).length > 0 || !child.text.trim()) {
-      issues.push(issue("error", "scope.invalid-observed-shape", planFile, `ObservedWriteScope/${child.tag} must be a non-empty plain text field.`));
+      issues.push(issue("error", definition.invalidShapeCode, planFile, `${definition.tag}/${child.tag} must be a non-empty plain text field.`));
       continue;
     }
     if (child.tag === "Glob") globValues.push(child.text.trim());
@@ -427,7 +461,7 @@ function extractObservedWriteScope(
       scope.files.push(resolveContainedProjectPath(projectRoot, authoredFile, { mode: "output" }).relativePath);
     } catch (error) {
       const detail = error instanceof ProjectPathError ? `${error.code}: ${error.message}` : String(error);
-      issues.push(issue("error", "scope.invalid-path", planFile, `Observed write path ${JSON.stringify(authoredFile)} is invalid: ${detail}`));
+      issues.push(issue("error", "scope.invalid-path", planFile, `${definition.pathLabel} ${JSON.stringify(authoredFile)} is invalid: ${detail}`));
     }
   }
   for (const authoredGlob of globValues) {
@@ -441,9 +475,9 @@ function extractObservedWriteScope(
   scope.globs = [...new Set(scope.globs)].sort();
   const entries = scope.files.length + scope.globs.length;
   if (hasNone && entries > 0) {
-    issues.push(issue("error", "scope.none-with-entries", planFile, "ObservedWriteScope/None cannot be combined with observed write entries."));
+    issues.push(issue("error", "scope.none-with-entries", planFile, `${definition.tag}/None cannot be combined with ${definition.entryLabel} entries.`));
   } else if (!hasNone && entries === 0) {
-    issues.push(issue("error", "scope.empty-observed-write-scope", planFile, "ObservedWriteScope must declare at least one File/Path/Glob or an explicit <None /> marker."));
+    issues.push(issue("error", definition.emptyScopeCode, planFile, `${definition.tag} must declare at least one File/Path/Glob or an explicit <None /> marker.`));
   }
   return { scope, issues };
 }

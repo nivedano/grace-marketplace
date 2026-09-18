@@ -9,6 +9,7 @@ import {
   detectScopeOverlaps,
   detectUnsafeConcurrentExecution,
   durableOverlaps,
+  observedWriteScopeContains,
   parseScopeGlob,
   scopeGlobsOverlap,
   type DurableOwnershipIndex,
@@ -173,6 +174,67 @@ describe("GRACE 4 scope detector", () => {
 
   (process.platform === "win32" ? it : it.skip)("uses Windows case-insensitive collision semantics on Windows", () => {
     expect(scopeGlobsOverlap(parseScopeGlob("SRC/**/Auth*.TS"), parseScopeGlob("src/**/auth-file.ts"), false)).toBe(true);
+  });
+
+  it("parses an optional review scope and keeps it out of parallel-safety blocking", () => {
+    const root = createProject();
+    writeProjectFile(root, ".grace/changes/active/C-REVIEW/spec.xml", `<GraceChangeSpec graceVersion="4.0" status="approved"><C-REVIEW /></GraceChangeSpec>`);
+    writeProjectFile(
+      root,
+      ".grace/changes/active/C-REVIEW/plan.xml",
+      `<GraceChangePlan graceVersion="4.0" status="approved"><C-REVIEW><DurableScope><GraphAnchors><M-ONE /></GraphAnchors></DurableScope><ObservedWriteScope><File>src/one.ts</File></ObservedWriteScope><ReviewScope><Glob>design-rules/**</Glob><File>docs/invariants.md</File></ReviewScope></C-REVIEW></GraceChangePlan>`,
+    );
+    writeProjectFile(root, ".grace/changes/active/C-OTHER/spec.xml", `<GraceChangeSpec graceVersion="4.0" status="approved"><C-OTHER /></GraceChangeSpec>`);
+    writeProjectFile(
+      root,
+      ".grace/changes/active/C-OTHER/plan.xml",
+      `<GraceChangePlan graceVersion="4.0" status="approved"><C-OTHER><DurableScope><GraphAnchors><M-TWO /></GraphAnchors></DurableScope><ObservedWriteScope><File>src/two.ts</File></ObservedWriteScope><ReviewScope><Glob>design-rules/**</Glob></ReviewScope></C-OTHER></GraceChangePlan>`,
+    );
+
+    const scopes = collectActiveChangeScopes(resolveGrace4Paths(root));
+    const review = scopes.find((scope) => scope.changeId === "C-REVIEW")!;
+
+    expect(review.issues).toHaveLength(0);
+    expect(review.reviewWrites.globs).toEqual(["design-rules/**"]);
+    expect(review.reviewWrites.files).toEqual(["docs/invariants.md"]);
+    expect(review.observedWrites.files).toEqual(["src/one.ts"]);
+    expect(observedWriteScopeContains(review.reviewWrites, "design-rules/R-001.md")).toBe(true);
+    expect(observedWriteScopeContains(review.observedWrites, "design-rules/R-001.md")).toBe(false);
+    // A shared review corpus is the expected case, so it never blocks parallel execution.
+    expect(detectUnsafeConcurrentExecution(scopes)).toEqual([]);
+  });
+
+  it("omits review writes entirely when a plan declares no review scope", () => {
+    const root = createProject();
+    writeChange(root, "C-PLAIN", { graphAnchor: "M-PLAIN", file: "src/plain.ts" });
+
+    const scope = collectActiveChangeScopes(resolveGrace4Paths(root))[0]!;
+    expect(scope.issues).toHaveLength(0);
+    expect(scope.reviewWrites).toEqual({ files: [], globs: [] });
+    expect(observedWriteScopeContains(scope.reviewWrites, "design-rules/R-001.md")).toBe(false);
+  });
+
+  it("reports an empty or malformed review scope as a plan error", () => {
+    const root = createProject();
+    writeProjectFile(root, ".grace/changes/active/C-EMPTY/spec.xml", `<GraceChangeSpec graceVersion="4.0" status="approved"><C-EMPTY /></GraceChangeSpec>`);
+    writeProjectFile(
+      root,
+      ".grace/changes/active/C-EMPTY/plan.xml",
+      `<GraceChangePlan graceVersion="4.0" status="approved"><C-EMPTY><DurableScope><GraphAnchors><M-ONE /></GraphAnchors></DurableScope><ObservedWriteScope><File>src/one.ts</File></ObservedWriteScope><ReviewScope /></C-EMPTY></GraceChangePlan>`,
+    );
+    writeProjectFile(root, ".grace/changes/active/C-BAD/spec.xml", `<GraceChangeSpec graceVersion="4.0" status="approved"><C-BAD /></GraceChangeSpec>`);
+    writeProjectFile(
+      root,
+      ".grace/changes/active/C-BAD/plan.xml",
+      `<GraceChangePlan graceVersion="4.0" status="approved"><C-BAD><DurableScope><GraphAnchors><M-ONE /></GraphAnchors></DurableScope><ObservedWriteScope><File>src/one.ts</File></ObservedWriteScope><ReviewScope><Reviewer>anyone</Reviewer></ReviewScope></C-BAD></GraceChangePlan>`,
+    );
+
+    const scopes = collectActiveChangeScopes(resolveGrace4Paths(root));
+    const empty = scopes.find((scope) => scope.changeId === "C-EMPTY")!;
+    const bad = scopes.find((scope) => scope.changeId === "C-BAD")!;
+
+    expect(empty.issues.map((entry) => entry.code)).toContain("scope.empty-review-scope");
+    expect(bad.issues.map((entry) => entry.code)).toContain("scope.invalid-review-shape");
   });
 
   it("blocks file-to-glob and nested glob overlaps while allowing disjoint areas", () => {

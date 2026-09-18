@@ -68,14 +68,14 @@ export function run() {
   writeProjectFile(root, "src/example.test.ts", `import { expect, test } from "bun:test";\ntest("example", () => expect(1).toBe(1));\n`);
 }
 
-function writeChange(root: string, changeId: string, options: { location?: "active" | "archive"; specStatus: string; planStatus: string; file?: string; baselineAssertion?: string }) {
+function writeChange(root: string, changeId: string, options: { location?: "active" | "archive"; specStatus: string; planStatus: string; file?: string; baselineAssertion?: string; reviewScope?: string }) {
   const location = options.location ?? "active";
   const bundle = `.grace/changes/${location}/${changeId}`;
   writeProjectFile(root, `${bundle}/spec.xml`, `<GraceChangeSpec graceVersion="4.0" status="${options.specStatus}"><${changeId}><Summary>Change.</Summary><Goals><Goal>Apply the change.</Goal></Goals><Constraints><Constraint>Preserve project validity.</Constraint></Constraints><NonGoals><NonGoal>Unrelated work.</NonGoal></NonGoals><AcceptanceCriteria><Criterion>The change is verified.</Criterion></AcceptanceCriteria><AffectedAreas><M-EXAMPLE /></AffectedAreas><VerificationIntent><ExpectedCommand>bun test</ExpectedCommand><ExpectedEvidence>Passing tests.</ExpectedEvidence></VerificationIntent></${changeId}></GraceChangeSpec>`);
   writeProjectFile(
     root,
     `${bundle}/plan.xml`,
-    `<GraceChangePlan graceVersion="4.0" status="${options.planStatus}"><${changeId}><IntentSummary>Apply the change.</IntentSummary><BaselineAssertions>${options.baselineAssertion ?? "<MustExist><Value>M-EXAMPLE</Value></MustExist>"}</BaselineAssertions><TargetAssertions><MustVerify><Module>M-EXAMPLE</Module></MustVerify></TargetAssertions><DurableScope><GraphAnchors><M-EXAMPLE /></GraphAnchors></DurableScope><ObservedWriteScope><File>${options.file ?? "src/example.ts"}</File></ObservedWriteScope><ImplementationPlan><T-001><Title>Apply change</Title><DependsOn></DependsOn><AcceptanceCriteria><Criterion>The change is complete.</Criterion></AcceptanceCriteria><Verification><Command>bun test</Command></Verification></T-001></ImplementationPlan></${changeId}></GraceChangePlan>`,
+    `<GraceChangePlan graceVersion="4.0" status="${options.planStatus}"><${changeId}><IntentSummary>Apply the change.</IntentSummary><BaselineAssertions>${options.baselineAssertion ?? "<MustExist><Value>M-EXAMPLE</Value></MustExist>"}</BaselineAssertions><TargetAssertions><MustVerify><Module>M-EXAMPLE</Module></MustVerify></TargetAssertions><DurableScope><GraphAnchors><M-EXAMPLE /></GraphAnchors></DurableScope><ObservedWriteScope><File>${options.file ?? "src/example.ts"}</File></ObservedWriteScope>${options.reviewScope ?? ""}<ImplementationPlan><T-001><Title>Apply change</Title><DependsOn></DependsOn><AcceptanceCriteria><Criterion>The change is complete.</Criterion></AcceptanceCriteria><Verification><Command>bun test</Command></Verification></T-001></ImplementationPlan></${changeId}></GraceChangePlan>`,
   );
 }
 
@@ -252,6 +252,58 @@ describe("grace status", () => {
     expect(result.observedDrift.unexplainedFiles).toContain("unplanned.txt");
     expect(result.derivedStates).toContain("explained-observed-drift");
     expect(result.derivedStates).toContain("unexplained-observed-drift");
+  });
+
+  it("explains drift inside a declared review scope without widening the approved write scope", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-REVIEW", {
+      specStatus: "approved",
+      planStatus: "approved",
+      file: "src/example.ts",
+      reviewScope: "<ReviewScope><Glob>design-rules/**</Glob></ReviewScope>",
+    });
+    writeProjectFile(root, "design-rules/R-001.md", "# rule");
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "grace@example.test"]);
+    runGit(root, ["config", "user.name", "GRACE Test"]);
+    runGit(root, ["config", "commit.gpgsign", "false"]);
+    runGit(root, ["config", "core.hooksPath", "disabled-hooks"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "test: baseline"]);
+    writeProjectFile(root, "design-rules/R-001.md", "# rule amended by review");
+    writeProjectFile(root, "design-rules/R-002.md", "# rule added by review");
+
+    const result = await collectProjectStatus(root);
+    expect(result.integrity.errors).toBe(0);
+    expect(result.observedDrift.explainedFiles).toContain("design-rules/R-001.md");
+    expect(result.observedDrift.explainedFiles).toContain("design-rules/R-002.md");
+    expect(result.observedDrift.unexplainedFiles).not.toContain("design-rules/R-001.md");
+    expect(result.derivedStates).not.toContain("unexplained-observed-drift");
+  });
+
+  it("never lets a review scope explain an edit to its own approved spec or plan", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-LAUNDER", {
+      specStatus: "approved",
+      planStatus: "approved",
+      reviewScope: "<ReviewScope><Glob>.grace/**</Glob></ReviewScope>",
+    });
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "grace@example.test"]);
+    runGit(root, ["config", "user.name", "GRACE Test"]);
+    runGit(root, ["config", "commit.gpgsign", "false"]);
+    runGit(root, ["config", "core.hooksPath", "disabled-hooks"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "test: baseline"]);
+    const planFile = path.join(root, ".grace/changes/active/C-LAUNDER/plan.xml");
+    writeFileSync(planFile, readFileSync(planFile, "utf8").replace("Apply the change.", "Apply the edited change."));
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-LAUNDER")!;
+    expect(result.observedDrift.unexplainedFiles).toContain(".grace/changes/active/C-LAUNDER/plan.xml");
+    expect(change.derivedStates).toContain("approved-contract-drift");
   });
 
   it("keeps both source and destination paths for git rename drift", async () => {

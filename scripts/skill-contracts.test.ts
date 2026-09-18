@@ -53,6 +53,27 @@ describe("GRACE lifecycle skill contracts", () => {
     expect(execute.toLowerCase()).not.toContain("refresh assertions");
   });
 
+  it("gives the reviewer's mandated edit a declared, bounded scope", () => {
+    const plan = read("skills/grace/grace-plan/SKILL.md");
+    const planTemplate = read("skills/grace/grace-plan/references/change-plan-template.xml");
+    const reviewer = read("skills/grace/grace-reviewer/SKILL.md");
+    const execute = read("skills/grace/grace-execute/SKILL.md");
+
+    expect(plan).toContain("<review_scope>");
+    expect(plan).toContain("optional sibling of `ObservedWriteScope`");
+    expect(plan).toContain("`ObservedWriteScope`, `ReviewScope`, or tasks in place");
+    expect(planTemplate).toContain("<ReviewScope>");
+
+    // The upstream default stands; ReviewScope is what makes the ask explicit.
+    expect(reviewer).toContain("Do not fix unless explicitly asked.");
+    expect(reviewer).toContain("<mandated_edits>");
+    expect(reviewer).toContain("is the explicit ask");
+    expect(reviewer).toContain("never edits in place");
+
+    expect(execute).toContain("declared `ReviewScope`");
+    expect(execute).toContain("count as explained drift");
+  });
+
   it("documents fail-closed CLI and derived readiness behavior", () => {
     const cli = read("skills/grace/grace-cli/SKILL.md");
     const status = read("skills/grace/grace-status/SKILL.md");

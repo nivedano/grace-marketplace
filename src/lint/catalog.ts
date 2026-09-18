@@ -48,6 +48,16 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
     explanation: "Two or more active change scopes write to overlapping regions, which can cause unsafe concurrent execution.",
     remediation: ["Do not run overlapping observed writes in parallel-safe mode.", "Sequence the changes or split scopes to eliminate the overlap."],
   },
+  "scope.invalid-review-shape": {
+    title: "Invalid Review Scope Shape",
+    explanation: "The optional <ReviewScope> section of a GraceChangePlan uses the same grammar as <ObservedWriteScope>: only File, Path, Glob, or an explicit None marker, each a non-empty plain text field.",
+    remediation: ["Declare the review corpus with File/Path/Glob children or a single <None /> marker.", "Remember that review scope is a drift-attribution boundary, not a parallel-safety boundary; it is never used to block concurrent execution."],
+  },
+  "scope.empty-review-scope": {
+    title: "Empty Review Scope",
+    explanation: "A GraceChangePlan declares <ReviewScope> but names no path. ReviewScope is optional, so an empty section is always a mistake: either it should name the corpus a reviewer may amend, or it should not be there.",
+    remediation: ["Name the review corpus with at least one File/Path/Glob entry.", "Add an explicit <None /> marker, or delete the section entirely, when review amends nothing."],
+  },
   "change.superseded-missing-replacement": {
     title: "Superseded Change Missing Replacement Reference",
     explanation: "A GraceChangeSpec or GraceChangePlan with status='superseded' should name the replacement C-* anchor via a <Replacement> or <ReplacementChange> child tag.",

@@ -21,13 +21,17 @@ description: Read an approved GRACE 4 GraceChangeSpec and optional design contex
 
 <approved_plan_immutability>
 - If `plan.xml` already exists with status `approved`, stop before writing.
-- Do not refresh `BaselineAssertions`, `TargetAssertions`, `DurableScope`, `ObservedWriteScope`, or tasks in place.
+- Do not refresh `BaselineAssertions`, `TargetAssertions`, `DurableScope`, `ObservedWriteScope`, `ReviewScope`, or tasks in place.
 - Create a new `C-*` bundle and mark the old bundle superseded with an explicit replacement reference.
 </approved_plan_immutability>
 
 <must_do>
 Produce `plan.xml` from `references/change-plan-template.xml` as draft unless the user explicitly approves the completed plan. Require a matching `C-*` wrapper, meaningful intent, non-empty machine-checkable baseline and target assertions, explicit durable and observed scopes, and unique acyclic `T-NNN` tasks. A scope with no writes must use an explicit `<None />` marker; prose such as "none" is invalid. Every task has one `Title`, one `DependsOn` element listing zero or more predecessors as canonical comma-separated `T-NNN` values (for example `<DependsOn>T-001, T-002</DependsOn>`), non-empty acceptance criteria, and non-empty verification commands. Dependencies form a directed acyclic graph: list only true predecessors and never linearize independent tasks into a chain to express ordering. Surface stale-state and coexistence warnings, and reject unsupported scope glob syntax instead of guessing.
 </must_do>
+
+<review_scope>
+`ReviewScope` is an optional sibling of `ObservedWriteScope` using the same `File`/`Path`/`Glob`/`None` grammar. Declare it only when the project asks review to amend a corpus it owns, such as design rules or invariants; name that corpus and nothing else. Paths inside it are attributed to the change as explained drift instead of unknown drift, so a reviewer's mandated edit no longer hard-stops execution. It is a drift-attribution boundary only: review scope never widens `ObservedWriteScope`, never authorizes editing the approved `spec.xml` or `plan.xml`, and is never used to block parallel execution, so two changes may share one review corpus. Omit the section entirely when review amends nothing.
+</review_scope>
 
 <command_phase_rules>
 - `current` is an active-baseline preflight and is valid only before observed writes begin.
