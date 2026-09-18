@@ -17,6 +17,10 @@ Require one active bundle with approved, identity-matched `spec.xml` and `plan.x
 - Parallel preflight: `grace lint --path PROJECT --parallel-preflight`
 </assertion_commands>
 
+<verification_supervision>
+One supervised invocation per verification job. Record its job id, process identity, start time, deadline, output path, and exit status. The deadline derives from the command's declared budget where one exists, otherwise from `--command-timeout` (default 600s). Empty output is a diagnosis trigger, not a result: read the job's own exit status before concluding anything, and never launch a second copy of a job that may still hold the substrate. On deadline, kill the process group, report it, and do not retry silently. A `--run-commands` gate assumes exclusive use of the host's container substrate and memory.
+</verification_supervision>
+
 <mode_selection>
 Wait for explicit `sequential` or `parallel-safe` choice. Parallel-safe requires the explicit preflight to pass. Workers never mutate approved plans; durable `.grace` changes are applied centrally after observed work verifies.
 </mode_selection>

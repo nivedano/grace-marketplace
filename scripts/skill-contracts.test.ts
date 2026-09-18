@@ -92,6 +92,27 @@ describe("GRACE migration cleanup contract", () => {
   });
 });
 
+describe("GRACE verification supervision contract", () => {
+  it("requires one supervised invocation per verification job in execute and subagent presets", () => {
+    const execute = read("skills/grace/grace-execute/SKILL.md");
+    const subagents = read("skills/grace/grace-setup-subagents/SKILL.md");
+
+    expect(execute.match(/<verification_supervision>/g)).toHaveLength(1);
+    expect(execute.match(/<\/verification_supervision>/g)).toHaveLength(1);
+    expect(execute).toContain("One supervised invocation per verification job");
+    expect(execute).toContain("`--command-timeout`");
+    expect(execute).toContain("Empty output is a diagnosis trigger");
+    expect(execute).toContain("never launch a second copy of a job that may still hold the substrate");
+    expect(execute).toContain("kill the process group");
+    expect(execute).toContain("do not retry silently");
+    expect(execute).toContain("exclusive use of the host's container substrate and memory");
+
+    expect(subagents).toContain("supervise every verification job as one invocation");
+    expect(subagents).toContain("never launch a second copy of a job that may still hold the substrate");
+    expect(subagents).toContain("do not retry silently");
+  });
+});
+
 describe("published skill mirrors", () => {
   it("keeps every published canonical skill byte-identical to its packaged copy", () => {
     const marketplace = JSON.parse(read(".claude-plugin/marketplace.json")) as {
