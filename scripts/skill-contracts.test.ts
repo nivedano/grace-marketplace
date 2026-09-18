@@ -53,6 +53,18 @@ describe("GRACE lifecycle skill contracts", () => {
     expect(execute.toLowerCase()).not.toContain("refresh assertions");
   });
 
+  it("continues the run loop and bounds unattended authorization", () => {
+    const execute = read("skills/grace/grace-execute/SKILL.md");
+
+    expect(execute.match(/<run_loop>/g)).toHaveLength(1);
+    expect(execute.match(/<\/run_loop>/g)).toHaveLength(1);
+    expect(execute.match(/<unattended_mode>/g)).toHaveLength(1);
+    expect(execute.match(/<\/unattended_mode>/g)).toHaveLength(1);
+    expect(execute).toContain("dispatch the next dependency-ready task without returning to the user");
+    expect(execute).toContain("Return to the user only on a recovery-table hard stop");
+    expect(execute).toContain("Everything else still stops.");
+  });
+
   it("documents fail-closed CLI and derived readiness behavior", () => {
     const cli = read("skills/grace/grace-cli/SKILL.md");
     const status = read("skills/grace/grace-status/SKILL.md");

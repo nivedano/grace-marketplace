@@ -40,4 +40,12 @@ Wait for explicit `sequential` or `parallel-safe` choice. Parallel-safe requires
 7. Only then set spec and plan to `applied` and archive the complete bundle.
 8. Never edit approved assertions/scopes/tasks in place, bypass stale evidence, or continue through unknown drift.
 </execution_rules>
+
+<run_loop>
+After a task's evidence is accepted and its work is committed, dispatch the next dependency-ready task without returning to the user. After a change is archived, take the next ready change. Return to the user only on a recovery-table hard stop, a `spec.xml` deviation, an owner gate, or when no ready work remains.
+</run_loop>
+
+<unattended_mode>
+When the owner has authorized an unattended run, the mode choice and the apply authorization are recorded once, before execution, and stand as the answers to `<mode_selection>` and execution rule 6. The authorization names: mode, apply authority, red-gate policy, per-command timeout, and the standing rulings the run may apply without asking. Everything else still stops.
+</unattended_mode>
 </skill>
