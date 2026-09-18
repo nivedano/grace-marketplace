@@ -1,4 +1,4 @@
-import { createWriteStream, type WriteStream } from "node:fs";
+import { copyFileSync, createWriteStream, type WriteStream } from "node:fs";
 import path from "node:path";
 
 import {
@@ -6,7 +6,9 @@ import {
   createRunDir,
   projectSlug,
   pruneRuns,
+  readRunMeta,
   resolveLogRoot,
+  resolveRunDirRef,
   writeRunMeta,
   type RunMeta,
   type RunMetaCommand,
@@ -36,6 +38,14 @@ export type CommandRunnerOptions = {
   logRoot?: string;
   /** Injectable clock for deterministic run directory names. */
   now?: () => Date;
+  /**
+   * Run reference whose non-passing commands are the only ones executed: a run directory
+   * name, an absolute run directory path, or `last`. Commands that passed there are carried
+   * over instead of re-executed. Refused unless the referenced run matches this invocation.
+   */
+  onlyFailed?: string;
+  /** Runs every declared command even after one fails, instead of skipping the remainder. */
+  continueOnFailure?: boolean;
 };
 
 export type CommandRunResult = {
@@ -50,6 +60,8 @@ export type CommandRunResult = {
   logFile: string | null;
   /** Last <=15 lines and <=4KB of combined stdout+stderr; null on success or no output. */
   outputTail: string | null;
+  /** Run reference this passing result was carried over from; absent when the command ran here. */
+  resumedFrom?: string;
 };
 
 export type CommandRunSummary = {
@@ -61,6 +73,93 @@ export type CommandRunSummary = {
 /** Grace period between SIGTERM and SIGKILL when a process group must die. */
 export const TERM_GRACE_MS = 5000;
 
+/**
+ * Refusal raised when `--only-failed` cannot prove the referenced run describes this exact
+ * invocation. Carried to the CLI boundary, which renders it as an invalid-arguments failure.
+ */
+export class CommandResumeRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CommandResumeRefusal";
+  }
+}
+
+/**
+ * Identity of the current invocation checked against a recorded run before resuming.
+ * Tree identity (head, branch, dirty) is deliberately absent: meta.json does not record it
+ * yet, so the guard below falls back to a byte-identical declared command set. When those
+ * fields land in RunMeta they become extra members here and extra checks in one place.
+ */
+export type ResumeIdentity = {
+  projectRoot: string;
+  changeId: string | null;
+  assertionMode: string;
+  commands: string[];
+};
+
+/** Which declared commands a resume must execute, and the recorded entries for the rest. */
+export type ResumePlan = {
+  /** Parallel to the declared commands: true when the command must run again. */
+  rerun: boolean[];
+  /** The referenced run's recorded commands, index-aligned with the declared list. */
+  prior: RunMetaCommand[];
+};
+
+/** A recorded command passed only when it ran to completion with exit code zero. */
+function metaCommandPassed(command: RunMetaCommand): boolean {
+  return !command.skipped && !command.timedOut && command.exitCode === 0;
+}
+
+/**
+ * Decides whether the referenced run may be resumed, and which commands that implies.
+ * Every mismatch is a refusal rather than a silent full run, because resuming against a
+ * different project, change, mode, or command set would report stale evidence as fresh.
+ */
+export function validateResumeEligibility(
+  current: ResumeIdentity,
+  prior: RunMeta | null,
+  ref: string,
+): ResumePlan {
+  if (!prior) {
+    throw new CommandResumeRefusal(
+      `\`--only-failed ${ref}\` refused: the referenced run has no readable meta.json.`,
+    );
+  }
+  if (path.resolve(prior.projectRoot) !== path.resolve(current.projectRoot)) {
+    throw new CommandResumeRefusal(
+      `\`--only-failed ${ref}\` refused: that run belongs to project \`${prior.projectRoot}\`, not \`${current.projectRoot}\`.`,
+    );
+  }
+  if ((prior.changeId ?? null) !== current.changeId) {
+    throw new CommandResumeRefusal(
+      `\`--only-failed ${ref}\` refused: that run recorded change \`${prior.changeId ?? "none"}\`, this invocation selects \`${current.changeId ?? "none"}\`.`,
+    );
+  }
+  if (prior.assertionMode !== current.assertionMode) {
+    throw new CommandResumeRefusal(
+      `\`--only-failed ${ref}\` refused: that run used assertion mode \`${prior.assertionMode}\`, this invocation uses \`${current.assertionMode}\`.`,
+    );
+  }
+  // Without recorded tree identity the only honest evidence that the gate is the same gate is
+  // that it declares the same commands in the same order, byte for byte.
+  if (prior.commands.length !== current.commands.length) {
+    throw new CommandResumeRefusal(
+      `\`--only-failed ${ref}\` refused: that run declared ${prior.commands.length} command(s), this invocation declares ${current.commands.length}.`,
+    );
+  }
+  for (let i = 0; i < current.commands.length; i++) {
+    if (prior.commands[i].command !== current.commands[i]) {
+      throw new CommandResumeRefusal(
+        `\`--only-failed ${ref}\` refused: command ${i + 1} differs (recorded \`${prior.commands[i].command}\`, declared \`${current.commands[i]}\`).`,
+      );
+    }
+  }
+  return {
+    rerun: prior.commands.map((command) => !metaCommandPassed(command)),
+    prior: prior.commands,
+  };
+}
+
 /** One spawned shell command with piped stdout/stderr and ignored stdin. */
 type ShellProcess = Bun.Subprocess<"ignore", "pipe", "pipe">;
 
@@ -70,12 +169,48 @@ type ShellProcess = Bun.Subprocess<"ignore", "pipe", "pipe">;
  * children run under `setsid $SHELL -lc <command>` so each command leads its own process group;
  * timeout and abort kill the whole group (SIGTERM, then SIGKILL after the grace period).
  * Windows children run under cmd.exe with taskkill /T /F for tree kills.
+ *
+ * Two opt-in modifiers change only what is attempted: `onlyFailed` re-runs just the commands a
+ * referenced run did not pass (refusing when that run does not describe this invocation) and
+ * `continueOnFailure` keeps going after a failure instead of skipping the remainder. With
+ * neither set the behaviour is exactly the fail-fast run described above.
  */
 export async function runDeclaredCommands(
   declared: DeclaredCommand[],
   options: CommandRunnerOptions,
   signal?: AbortSignal,
 ): Promise<CommandRunSummary> {
+  // Resume eligibility is settled before anything is created, so a refusal leaves no empty
+  // run directory behind and `last` never resolves to the directory being created now. It is
+  // also settled before the empty early return, so resuming a gate that no longer declares any
+  // command refuses on the command-count mismatch instead of passing without touching the run.
+  const requestedRef = options.onlyFailed ? options.onlyFailed : null;
+  // Provenance is always the resolved run directory, never the spelling on the command line:
+  // `last` names a different run tomorrow, so recording it would be evidence nobody can follow.
+  let resumeRef: string | null = null;
+  let resume: ResumePlan | null = null;
+  if (requestedRef) {
+    const logRoot = options.logRoot ?? resolveLogRoot();
+    const slug = projectSlug(options.root);
+    const priorDir = resolveRunDirRef(logRoot, slug, requestedRef);
+    if (!priorDir) {
+      throw new CommandResumeRefusal(
+        `\`--only-failed ${requestedRef}\` refused: no run directory found under ${path.join(logRoot, slug, "runs")}.`,
+      );
+    }
+    resume = validateResumeEligibility(
+      {
+        projectRoot: options.root,
+        changeId: options.changeId ?? null,
+        assertionMode: options.assertionMode,
+        commands: declared.map((entry) => entry.command),
+      },
+      readRunMeta(priorDir),
+      requestedRef,
+    );
+    resumeRef = priorDir;
+  }
+
   if (declared.length === 0) {
     return { status: "passed", runDir: null, commands: [] };
   }
@@ -102,6 +237,13 @@ export async function runDeclaredCommands(
   for (let i = 0; i < total; i++) {
     emit(`  [${i + 1}/${total}] ${declared[i].command}`);
   }
+  if (resume) {
+    const rerunCount = resume.rerun.filter(Boolean).length;
+    emit(
+      `resume: ${rerunCount} of ${total} command${rerunCount === 1 ? "" : "s"} re-run from ${resumeRef}, ` +
+        `${total - rerunCount} carried over`,
+    );
+  }
 
   let currentGroup: ((signal: NodeJS.Signals) => void) | null = null;
   let aborted = false;
@@ -115,11 +257,21 @@ export async function runDeclaredCommands(
   const results: CommandRunResult[] = [];
   let status: CommandRunSummary["status"] = "passed";
   let failedIndex = 0;
+  const failedIndexes: number[] = [];
 
   try {
     for (let i = 0; i < total; i++) {
       const entry = declared[i];
-      if (status !== "passed" || aborted) {
+      if (aborted) {
+        results.push(skippedResult(entry, i + 1));
+        continue;
+      }
+      if (resume && !resume.rerun[i]) {
+        emit(`↷ [${i + 1}/${total}] ${entry.command} (passed in ${resumeRef})`);
+        results.push(carriedResult(entry, i + 1, resume.prior[i], resumeRef as string, runDir));
+        continue;
+      }
+      if (status !== "passed" && !options.continueOnFailure) {
         results.push(skippedResult(entry, i + 1));
         continue;
       }
@@ -131,12 +283,14 @@ export async function runDeclaredCommands(
       if (aborted) {
         status = "interrupted";
         failedIndex = i + 1;
-      } else if (outcome.result.timedOut) {
-        status = "timeout";
-        failedIndex = i + 1;
-      } else if (outcome.result.exitCode !== 0) {
-        status = "failed";
-        failedIndex = i + 1;
+      } else if (outcome.result.timedOut || outcome.result.exitCode !== 0) {
+        // The summary keeps naming the first non-pass, so --continue-on-failure only widens
+        // what is attempted, never what the run reports as the reason it is red.
+        if (status === "passed") {
+          status = outcome.result.timedOut ? "timeout" : "failed";
+          failedIndex = i + 1;
+        }
+        failedIndexes.push(i + 1);
       }
     }
   } finally {
@@ -146,7 +300,13 @@ export async function runDeclaredCommands(
   const finishedAt = clock();
   const totalMs = finishedAt.getTime() - startedAt.getTime();
   const passed = results.filter((result) => !result.skipped && !result.timedOut && result.exitCode === 0).length;
-  emit(summaryLine(status, failedIndex, total, passed, totalMs));
+  const collected = Boolean(options.continueOnFailure) && failedIndexes.length > 0 && status !== "interrupted";
+  emit(
+    collected
+      // Nothing stopped when every command was attempted, so the fail-fast wording would lie.
+      ? `complete: ${passed}/${total} commands passed; failed: ${failedIndexes.join(", ")} (total ${formatDuration(totalMs)})`
+      : summaryLine(status, failedIndex, total, passed, totalMs),
+  );
 
   if (runDir) {
     const meta: RunMeta = {
@@ -159,6 +319,7 @@ export async function runDeclaredCommands(
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
       status,
+      ...(resumeRef ? { resumedFrom: resumeRef } : {}),
       commands: results.map(toMetaCommand),
     };
     writeRunMeta(runDir, meta);
@@ -480,6 +641,47 @@ function skippedResult(entry: DeclaredCommand, index: number): CommandRunResult 
   };
 }
 
+/**
+ * Result for a command the referenced run already passed: the recorded exit code and duration
+ * are kept verbatim, and the earlier log is copied into this run directory so retention pruning
+ * of the referenced run can never take the evidence with it.
+ */
+function carriedResult(
+  entry: DeclaredCommand,
+  index: number,
+  prior: RunMetaCommand,
+  ref: string,
+  runDir: string | null,
+): CommandRunResult {
+  return {
+    index,
+    assertionKey: entry.assertionKey,
+    assertionId: entry.assertionId,
+    command: entry.command,
+    exitCode: prior.exitCode,
+    durationMs: prior.durationMs,
+    timedOut: false,
+    skipped: false,
+    logFile: carryLogFile(prior.logFile, index, entry.command, runDir),
+    outputTail: null,
+    resumedFrom: ref,
+  };
+}
+
+/** Copies one earlier command log into the new run directory; falls back to the recorded path. */
+function carryLogFile(priorLog: string | null, index: number, command: string, runDir: string | null): string | null {
+  if (!priorLog || !runDir) {
+    return priorLog;
+  }
+  const target = path.join(runDir, commandLogFileName(index, command));
+  try {
+    copyFileSync(priorLog, target);
+    return target;
+  } catch {
+    return priorLog;
+  }
+}
+
 function toMetaCommand(result: CommandRunResult): RunMetaCommand {
   return {
     index: result.index,
@@ -490,6 +692,7 @@ function toMetaCommand(result: CommandRunResult): RunMetaCommand {
     timedOut: result.timedOut,
     skipped: result.skipped,
     logFile: result.logFile,
+    ...(result.resumedFrom ? { resumedFrom: result.resumedFrom } : {}),
   };
 }
 

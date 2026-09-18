@@ -122,6 +122,8 @@ Migration cleanup is separately gated: successful current lint, fresh status pro
 | `grace lint --path <root> --change C-ID --assertions baseline [--run-commands]` | Validate the immutable selected baseline before implementation; command assertions run only when explicitly enabled |
 | `grace lint --path <root> --change C-ID --assertions target --run-commands` | Validate selected target assertions and explicitly opt into `MustPassCommand` execution |
 | `grace lint --path <root> --change C-ID --assertions final [--run-commands]` | Run the final full-project gate, evaluate the selected target, and keep unrelated approved baselines active without re-evaluating the selected baseline |
+| `grace lint --path <root> --change C-ID --assertions target --run-commands --only-failed <run>` | Re-run only the commands the referenced run did not pass (`<run>` is a run directory name, an absolute run path, or `last`); carries the passing evidence into a new run and refuses when the referenced run does not declare the same commands for the same change and mode |
+| `grace lint --path <root> --change C-ID --assertions target --run-commands --continue-on-failure` | Attempt every declared command in one pass instead of skipping the remainder after the first failure |
 | `grace lint --path <root> --parallel-preflight` | Run the explicit approved-plan scope coexistence gate required for parallel-safe execution |
 | `grace status --path <root>` | Report durable health, stale plans, scope conflicts, and explained/unexplained observed git drift |
 | `grace module find <query> --path <root>` | Search graph projection modules by id, path, text, dependency, or verification id |

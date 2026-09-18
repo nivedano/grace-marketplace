@@ -28,6 +28,12 @@ export type CommandEvidence = {
   timedOut: boolean;
   skipped: boolean;
   logFile: string | null;
+  /**
+   * Run directory this evidence was carried over from by --only-failed; absent when the
+   * command ran in this invocation. A consumer treating a resumed report as a full gate
+   * would otherwise read stale zeros as fresh ones.
+   */
+  resumedFrom?: string;
 };
 
 export type LintResult = {
@@ -66,6 +72,10 @@ export type LintOptions = {
   commandProgress?: (line: string) => void;
   /** Overrides the XDG cache root for run logs; used by tests and tools. */
   commandLogRoot?: string;
+  /** Run reference whose non-passing commands are the only ones re-run; refused on mismatch. */
+  commandOnlyFailed?: string;
+  /** Runs every declared command instead of skipping the remainder after the first failure. */
+  commandContinueOnFailure?: boolean;
   /** Aborts a running command batch; the CLI wires SIGINT/SIGTERM here. */
   commandSignal?: AbortSignal;
 };

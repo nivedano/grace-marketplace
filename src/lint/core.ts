@@ -197,7 +197,9 @@ async function validateAssertions(
   let commandResults: Map<string, CommandRunResult[]> | undefined;
   if (runCommands) {
     const declared = collectDeclaredCommands(jobs);
-    if (declared.length > 0) {
+    // A resume is still offered the empty list: the runner refuses it rather than reporting a
+    // gate that no longer declares commands as a successful resume of one that did.
+    if (declared.length > 0 || options.commandOnlyFailed) {
       const summary = await runDeclaredCommands(declared, {
         root,
         changeId: options.changeId,
@@ -206,6 +208,8 @@ async function validateAssertions(
         verbosity: options.commandVerbosity ?? "compact",
         progress: options.commandProgress,
         logRoot: options.commandLogRoot,
+        onlyFailed: options.commandOnlyFailed,
+        continueOnFailure: options.commandContinueOnFailure,
       }, options.commandSignal);
       result.commands = summary.commands.map(toCommandEvidence);
       commandResults = new Map();
@@ -252,6 +256,7 @@ function toCommandEvidence(command: CommandRunResult): CommandEvidence {
     timedOut: command.timedOut,
     skipped: command.skipped,
     logFile: command.logFile,
+    ...(command.resumedFrom ? { resumedFrom: command.resumedFrom } : {}),
   };
 }
 

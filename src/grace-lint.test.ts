@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "bun:test";
 
-import { formatTextReport, lintGraceProject, parseCommandTimeoutMs, resolveCommandVerbosity } from "./grace-lint";
+import { formatTextReport, lintGraceProject, parseCommandTimeoutMs, resolveCommandResumeOptions, resolveCommandVerbosity } from "./grace-lint";
 import { getLintIssueGuide } from "./lint/catalog";
 
 function createProject() {
@@ -429,6 +429,43 @@ function Publish-Artifacts {
     expect(cliPayload.commands[0].exitCode).toBe(0);
   });
 
+  it("run-commands gate: --only-failed re-runs the failing command and marks carried evidence", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeProjectFile(root, "gate-ok.js", `console.log("gate-ok");\n`);
+    writeProjectFile(root, "gate-check.js", `import { existsSync } from "node:fs";\nprocess.exit(existsSync("marker.txt") ? 0 : 7);\n`);
+    writeApprovedChange(
+      root,
+      "C-GATE-RESUME",
+      `<MustExist><Value>M-EXAMPLE</Value></MustExist>`,
+      `<MustPassCommand><Command>${process.execPath} gate-ok.js</Command></MustPassCommand>` +
+        `<MustPassCommand><Command>${process.execPath} gate-check.js</Command></MustPassCommand>`,
+    );
+
+    const logRoot = testCommandLogRoot();
+    const options = {
+      assertionMode: "target" as const,
+      changeId: "C-GATE-RESUME",
+      runCommands: true,
+      commandLogRoot: logRoot,
+      commandProgress: () => {},
+    };
+    const failed = await lintGraceProject(root, options);
+    expect(failed.commands?.[0]?.exitCode).toBe(0);
+    expect(failed.commands?.[1]?.exitCode).toBe(7);
+    expect(failed.commands?.[0]?.resumedFrom).toBeUndefined();
+
+    writeFileSync(path.join(root, "marker.txt"), "ready");
+    const runsParent = path.join(logRoot, readdirSync(logRoot)[0], "runs");
+    const ref = readdirSync(runsParent)[0];
+    const resumed = await lintGraceProject(root, { ...options, commandOnlyFailed: ref });
+
+    expect(resumed.summary.errors).toBe(0);
+    expect(resumed.commands?.[0]?.resumedFrom).toBe(path.join(runsParent, ref));
+    expect(resumed.commands?.[1]?.resumedFrom).toBeUndefined();
+    expect(resumed.commands?.[1]?.exitCode).toBe(0);
+  });
+
   it("run-commands gate: passing command yields evidence, compact progress, and meta.json", async () => {
     const root = createProject();
     writeMinimalGrace4Project(root);
@@ -688,6 +725,54 @@ describe("run-commands CLI flag resolution", () => {
     expect(() => parseCommandTimeoutMs("-5")).toThrow();
     expect(() => parseCommandTimeoutMs("1.5")).toThrow();
     expect(() => parseCommandTimeoutMs("soon")).toThrow();
+  });
+
+  it("accepts gate-resume flags only alongside --run-commands", () => {
+    expect(resolveCommandResumeOptions({ runCommands: false, continueOnFailure: false })).toEqual({ onlyFailed: undefined, continueOnFailure: false });
+    expect(resolveCommandResumeOptions({ runCommands: true, onlyFailed: "last", continueOnFailure: true })).toEqual({ onlyFailed: "last", continueOnFailure: true });
+    expect(() => resolveCommandResumeOptions({ runCommands: true, onlyFailed: "  ", continueOnFailure: false })).toThrow(/needs a run directory name/);
+    expect(() => resolveCommandResumeOptions({ runCommands: false, onlyFailed: "last", continueOnFailure: false })).toThrow(/requires `--run-commands`/);
+    expect(() => resolveCommandResumeOptions({ runCommands: false, continueOnFailure: true })).toThrow(/requires `--run-commands`/);
+  });
+
+  it("renders an unresolvable --only-failed run as an invalid-arguments refusal", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeApprovedChange(
+      root,
+      "C-RESUME",
+      `<MustExist><Value>M-EXAMPLE</Value></MustExist>`,
+      `<MustPassCommand><Command>${process.platform === "win32" ? "exit /b 0" : "exit 0"}</Command></MustPassCommand>`,
+    );
+
+    const repoRoot = path.resolve(import.meta.dir, "..");
+    const cli = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "./src/grace.ts",
+        "lint",
+        "--path",
+        root,
+        "--change",
+        "C-RESUME",
+        "--assertions",
+        "target",
+        "--run-commands",
+        "--only-failed",
+        "2020-01-01T00-00-00",
+        "--format",
+        "json",
+      ],
+      cwd: repoRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, XDG_CACHE_HOME: path.join(os.tmpdir(), `grace-cli-cache-${crypto.randomUUID()}`) },
+    });
+    expect(cli.exitCode).toBe(1);
+    const payload = JSON.parse(Buffer.from(cli.stdout).toString("utf8"));
+    expect(payload.ok).toBe(false);
+    expect(payload.error.code).toBe("invalid-arguments");
+    expect(payload.error.message).toContain("no run directory found");
   });
 
   it("resolves verbosity: json and quiet force compact, verbose and interactive force live", () => {

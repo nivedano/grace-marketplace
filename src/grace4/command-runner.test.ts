@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  CommandResumeRefusal,
   formatDuration,
   outputTailOf,
   runDeclaredCommands,
@@ -239,6 +240,143 @@ describe("runDeclaredCommands logs", () => {
     expect(summary.commands[0]?.logFile).toBeNull();
     expect(join(lines)).toContain("warning: unable to create command log directory");
     expect(join(lines)).toContain("✔ [1/1]");
+  });
+});
+
+/**
+ * A project root whose `check.js` exits 7 until `marker.txt` appears beside it. The command text
+ * stays byte-identical between runs, which is exactly what the resume guard requires, while the
+ * outcome still changes — the same shape as fixing the code a failing gate command tests.
+ */
+function resumeProject(): string {
+  const root = mkdtempSync(path.join(tmpdir(), "grace-resume-proj-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(
+    path.join(root, "check.js"),
+    `import { existsSync } from "node:fs";\nprocess.exit(existsSync("marker.txt") ? 0 : 7);\n`,
+  );
+  return root;
+}
+
+describe("runDeclaredCommands --only-failed", () => {
+  test("re-runs only the commands the referenced run did not pass", async () => {
+    const root = resumeProject();
+    const first = fixture({ root });
+    const commands = declared([printCommand("first"), `${process.execPath} check.js`, printCommand("third")]);
+
+    const failedRun = await runDeclaredCommands(commands, first.options);
+    expect(failedRun.status).toBe("failed");
+    expect(failedRun.commands[1]?.exitCode).toBe(7);
+    expect(failedRun.commands[2]?.skipped).toBe(true);
+    const firstMeta = JSON.parse(await Bun.file(path.join(failedRun.runDir!, "meta.json")).text());
+    expect("resumedFrom" in firstMeta).toBe(false);
+
+    writeFileSync(path.join(root, "marker.txt"), "ready");
+    // Referenced by directory name; provenance is recorded as the resolved absolute run.
+    const ref = failedRun.runDir!;
+    const second = fixture({ root, logRoot: first.logRoot });
+    const resumed = await runDeclaredCommands(commands, { ...second.options, onlyFailed: path.basename(ref) });
+
+    expect(resumed.status).toBe("passed");
+    expect(resumed.runDir).not.toBe(failedRun.runDir);
+    const text = join(second.lines);
+    expect(text).toContain(`resume: 2 of 3 commands re-run from ${ref}, 1 carried over`);
+    expect(text).not.toContain("▶ [1/3]");
+    expect(text).toContain(`↷ [1/3] ${printCommand("first")} (passed in ${ref})`);
+    expect(text).toContain("▶ [2/3]");
+    expect(text).toContain("▶ [3/3]");
+
+    const meta = JSON.parse(await Bun.file(path.join(resumed.runDir!, "meta.json")).text());
+    expect(meta.resumedFrom).toBe(ref);
+    expect(meta.status).toBe("passed");
+    expect(meta.commands).toHaveLength(3);
+    expect(meta.commands[0].resumedFrom).toBe(ref);
+    expect(meta.commands[0].exitCode).toBe(0);
+    expect("resumedFrom" in meta.commands[1]).toBe(false);
+    // The carried log lives in the new run directory, so pruning the referenced run cannot
+    // take the only copy of that evidence with it.
+    expect(path.dirname(meta.commands[0].logFile)).toBe(resumed.runDir as string);
+    expect(await Bun.file(meta.commands[0].logFile).text()).toContain("first");
+  });
+
+  test("`last` resolves the newest run and an all-passing run re-runs nothing", async () => {
+    const { logRoot, options } = fixture();
+    const commands = declared([printCommand("alpha"), printCommand("beta")]);
+    const green = await runDeclaredCommands(commands, options);
+    expect(green.status).toBe("passed");
+
+    const second = fixture({ logRoot });
+    const resumed = await runDeclaredCommands(commands, { ...second.options, onlyFailed: "last" });
+    expect(resumed.status).toBe("passed");
+    expect(resumed.runDir).not.toBe(green.runDir);
+    const text = join(second.lines);
+    // `last` names a different run tomorrow, so the recorded provenance is the resolved run.
+    expect(text).toContain(`resume: 0 of 2 commands re-run from ${green.runDir}, 2 carried over`);
+    expect(text).not.toContain("▶ ");
+    expect(resumed.commands.every((command) => command.resumedFrom === green.runDir)).toBe(true);
+  });
+
+  test("refuses an unknown run, a foreign change or mode, and a changed command set", async () => {
+    const { logRoot, options } = fixture();
+    const commands = declared([printCommand("gate")]);
+    const base = await runDeclaredCommands(commands, options);
+    const ref = path.basename(base.runDir!);
+
+    await expect(runDeclaredCommands(commands, { ...options, onlyFailed: "2020-01-01T00-00-00" }))
+      .rejects.toThrow(/no run directory found/);
+    await expect(runDeclaredCommands(commands, { ...options, onlyFailed: ref, changeId: "C-OTHER" }))
+      .rejects.toThrow(/recorded change `C-TEST`/);
+    await expect(runDeclaredCommands(commands, { ...options, onlyFailed: ref, assertionMode: "baseline" }))
+      .rejects.toThrow(/assertion mode `target`/);
+    await expect(runDeclaredCommands(declared([printCommand("gate"), printCommand("extra")]), { ...options, onlyFailed: ref }))
+      .rejects.toThrow(/declared 1 command\(s\), this invocation declares 2/);
+    await expect(runDeclaredCommands(declared([printCommand("other")]), { ...options, onlyFailed: ref }))
+      .rejects.toThrow(/command 1 differs/);
+
+    const orphan = path.join(logRoot, projectSlug(options.root), "runs", "2031-01-01T00-00-00");
+    mkdirSync(orphan, { recursive: true });
+    const refusal = runDeclaredCommands(commands, { ...options, onlyFailed: "2031-01-01T00-00-00" });
+    await expect(refusal).rejects.toBeInstanceOf(CommandResumeRefusal);
+    await expect(refusal).rejects.toThrow(/no readable meta.json/);
+  });
+
+  test("refuses a resume of a gate that no longer declares any command", async () => {
+    const { options } = fixture();
+    const base = await runDeclaredCommands(declared([printCommand("gate")]), options);
+    await expect(runDeclaredCommands([], { ...options, onlyFailed: path.basename(base.runDir!) }))
+      .rejects.toThrow(/declared 1 command\(s\), this invocation declares 0/);
+    // Without a resume, an empty declared list stays the silent no-op it has always been.
+    const empty = await runDeclaredCommands([], options);
+    expect(empty).toEqual({ status: "passed", runDir: null, commands: [] });
+  });
+
+  test("a refusal creates no run directory", async () => {
+    const { logRoot, options } = fixture();
+    const commands = declared([printCommand("solo")]);
+    await runDeclaredCommands(commands, options);
+    const runsParent = path.join(logRoot, projectSlug(options.root), "runs");
+    const before = readdirSync(runsParent);
+    await expect(runDeclaredCommands(declared([printCommand("changed")]), { ...options, onlyFailed: path.basename(before[0]) }))
+      .rejects.toThrow(/command 1 differs/);
+    expect(readdirSync(runsParent)).toEqual(before);
+  });
+});
+
+describe("runDeclaredCommands --continue-on-failure", () => {
+  test("runs every command and names all failures in the summary", async () => {
+    const { lines, options } = fixture();
+    const summary = await runDeclaredCommands(
+      declared(["exit 7", "exit 9", printCommand("last-one")]),
+      { ...options, continueOnFailure: true },
+    );
+    expect(summary.status).toBe("failed");
+    expect(summary.commands.some((command) => command.skipped)).toBe(false);
+    expect(summary.commands[1]?.exitCode).toBe(9);
+    expect(summary.commands[2]?.exitCode).toBe(0);
+    const text = join(lines);
+    expect(text).toContain("▶ [2/3]");
+    expect(text).toContain("▶ [3/3]");
+    expect(text).toContain("complete: 1/3 commands passed; failed: 1, 2 (total ");
   });
 });
 

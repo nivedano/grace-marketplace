@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -13,6 +13,8 @@ export type RunMetaCommand = {
   timedOut: boolean;
   skipped: boolean;
   logFile: string | null;
+  /** Run reference this already-passing command was carried over from; absent for executed commands. */
+  resumedFrom?: string;
 };
 
 /** meta.json written once per lint --run-commands invocation. */
@@ -26,6 +28,8 @@ export type RunMeta = {
   startedAt: string;
   finishedAt: string;
   status: "passed" | "failed" | "timeout" | "interrupted";
+  /** Run reference passed to --only-failed; absent for a full run. */
+  resumedFrom?: string;
   commands: RunMetaCommand[];
 };
 
@@ -70,6 +74,45 @@ export function createRunDir(logRoot: string, slug: string, startedAt: Date, cha
   }
   mkdirSync(candidate, { recursive: true });
   return candidate;
+}
+
+/**
+ * Resolves a --only-failed run reference to an absolute run directory without creating
+ * anything: an absolute path is used verbatim, `last` selects the newest run directory
+ * under logRoot/slug/runs (the stamped names sort chronologically), and any other value
+ * is treated as a run directory name under that same parent. Returns null when nothing
+ * matches, which the caller reports as a refusal.
+ */
+export function resolveRunDirRef(logRoot: string, slug: string, ref: string): string | null {
+  const runsParent = path.join(logRoot, slug, "runs");
+  if (path.isAbsolute(ref)) {
+    return statSafe(ref)?.isDirectory() ? path.resolve(ref) : null;
+  }
+  if (ref === "last") {
+    let entries: string[];
+    try {
+      entries = readdirSync(runsParent);
+    } catch {
+      return null;
+    }
+    const newest = entries
+      .filter((name) => statSafe(path.join(runsParent, name))?.isDirectory() ?? false)
+      .sort()
+      .pop();
+    return newest ? path.join(runsParent, newest) : null;
+  }
+  const candidate = path.join(runsParent, ref);
+  return statSafe(candidate)?.isDirectory() ? candidate : null;
+}
+
+/** Reads and parses one run directory's meta.json; returns null when missing or unparseable. */
+export function readRunMeta(runDir: string): RunMeta | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(runDir, "meta.json"), "utf8")) as RunMeta;
+    return parsed && Array.isArray(parsed.commands) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Best-effort meta.json write; returns false (never throws) on filesystem errors. */

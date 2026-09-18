@@ -2,6 +2,7 @@
 
 import { defineCommand, type CommandDef, runMain } from "citty";
 
+import { CommandResumeRefusal } from "./grace4/command-runner";
 import { formatLintExplanation, getLintIssueGuide } from "./lint/catalog";
 import { formatTextReport, isValidTextFormat, lintGraceProject } from "./lint/core";
 import type { LintAssertionMode, LintOptions, LintProfile, LintResult } from "./lint/types";
@@ -126,6 +127,15 @@ export const lintCommand = defineCommand({
       description: "Per-command timeout in seconds for --run-commands (default 600, 0 disables)",
       default: "600",
     },
+    onlyFailed: {
+      type: "string",
+      description: "Re-run only the commands a previous run did not pass: a run directory name, an absolute run path, or `last`",
+    },
+    continueOnFailure: {
+      type: "boolean",
+      description: "Run every declared command in --run-commands instead of skipping the rest after a failure",
+      default: false,
+    },
     verbose: {
       type: "boolean",
       description: "Stream full command output in --run-commands (forces live mode)",
@@ -167,6 +177,11 @@ export const lintCommand = defineCommand({
       const verbose = Boolean(context.args.verbose);
       const quiet = Boolean(context.args.quiet);
       const timeoutMs = parseCommandTimeoutMs(context.args.commandTimeout);
+      const resume = resolveCommandResumeOptions({
+        runCommands: Boolean(context.args.runCommands),
+        onlyFailed: context.args.onlyFailed,
+        continueOnFailure: Boolean(context.args.continueOnFailure),
+      });
       const verbosity = resolveCommandVerbosity({
         format,
         verbose,
@@ -188,7 +203,16 @@ export const lintCommand = defineCommand({
           parallelPreflight: Boolean(context.args.parallelPreflight),
           commandTimeoutMs: timeoutMs,
           commandVerbosity: verbosity,
+          commandOnlyFailed: resume.onlyFailed,
+          commandContinueOnFailure: resume.continueOnFailure,
           commandSignal: controller.signal,
+        }).catch((error) => {
+          // The runner refuses a resume it cannot prove safe; the CLI is where that becomes a
+          // rendered invalid-arguments failure instead of the generic lint fallback message.
+          if (error instanceof CommandResumeRefusal) {
+            throw new GraceCommandError("invalid-arguments", error.message);
+          }
+          throw error;
         });
 
         if (format === "json") {
@@ -216,6 +240,35 @@ export function parseCommandTimeoutMs(value: unknown): number {
     throw new GraceCommandError("invalid-arguments", `Unsupported --command-timeout \`${raw}\`. Use a non-negative integer number of seconds.`);
   }
   return Number(raw) * 1000;
+}
+
+/** Resolved `--only-failed` / `--continue-on-failure` selection for one lint invocation. */
+export type CommandResumeOptions = {
+  onlyFailed?: string;
+  continueOnFailure: boolean;
+};
+
+/**
+ * Validates the gate-resume flags: both are meaningless without `--run-commands`, and an empty
+ * `--only-failed` value cannot name a run. Resolution of the reference itself belongs to the
+ * runner, which is the only layer that knows the declared command set it must match.
+ */
+export function resolveCommandResumeOptions(input: {
+  runCommands: boolean;
+  onlyFailed?: unknown;
+  continueOnFailure: boolean;
+}): CommandResumeOptions {
+  const onlyFailed = input.onlyFailed === undefined || input.onlyFailed === null ? undefined : String(input.onlyFailed).trim();
+  if (onlyFailed !== undefined && onlyFailed.length === 0) {
+    throw new GraceCommandError("invalid-arguments", "`--only-failed` needs a run directory name, an absolute run path, or `last`.");
+  }
+  if (onlyFailed !== undefined && !input.runCommands) {
+    throw new GraceCommandError("invalid-arguments", "`--only-failed` requires `--run-commands`.");
+  }
+  if (input.continueOnFailure && !input.runCommands) {
+    throw new GraceCommandError("invalid-arguments", "`--continue-on-failure` requires `--run-commands`.");
+  }
+  return { onlyFailed, continueOnFailure: input.continueOnFailure };
 }
 
 /** Input for resolving the --run-commands output verbosity. */
