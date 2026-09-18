@@ -1,6 +1,6 @@
 ---
 name: grace-cli
-description: Operate the GRACE 4 CLI for .grace linting, status, module navigation, verification navigation, and file-local semantic markup.
+description: Operate the GRACE 4 CLI for .grace linting, status, module navigation, verification navigation, change archiving, and file-local semantic markup.
 ---
 
 <skill>
@@ -14,7 +14,12 @@ description: Operate the GRACE 4 CLI for .grace linting, status, module navigati
 - Parallel preflight: `grace lint --path PROJECT --parallel-preflight`
 - Status: `grace status --path PROJECT --with modules --json`
 - Navigation: `grace module find|show`, `grace verification find|show`, and `grace file show`.
+- Archive an applied bundle: `grace archive --path PROJECT --change C-ID [--record-file FILE]`
 </commands>
+
+<archive_contract>
+`grace archive` verifies every precondition before it writes one byte, so a refusal is never a partial archive. It requires the most recent run recorded for the change in `final` assertion mode to have status `passed`; a plan declaring no `MustPassCommand` records no run and cannot be archived until the gate records one. Until `meta.json` records VCS identity, the command matches run identity only and warns that it cannot confirm the evidence describes the current tree. It refuses when the git index holds staged files outside the bundle, flips the root `status` attribute of `spec.xml` and `plan.xml` from `approved` to `applied` with a targeted textual edit that never reformats the XML, then moves the bundle to `.grace/changes/archive/C-ID` with `git mv` (staged, never committed) or a filesystem rename when git does not track it. A failed move rolls the status flip back in the worktree and resets the bundle index entries to HEAD, so a refusal can never leave `applied` staged at the active path. `--record-file` must exist and must not be empty or whitespace-only; GRACE validates its presence only and never reads, rewrites, or copies it, because the record's shape is project policy.
+</archive_contract>
 
 <command_run_contract>
 `--run-commands` executes each declared `MustPassCommand` value once per lint, fail-fast, with a default 600s per-command timeout (`--command-timeout SECONDS` overrides, `0` disables). Plan, progress, and per-command result lines go to stderr; the lint report and JSON go to stdout, so piping stdout stays safe. Agents and pipes get compact output by default; interactive terminals see live streamed command output. Force modes with `--verbose` (live) or `--quiet` (compact); they are mutually exclusive, and `--format json` is always compact. Full combined output of every command is stored per run under `~/.cache/grace/run-commands/<project>/runs/<run>/` (respecting `XDG_CACHE_HOME`) with a machine-readable `meta.json`; failing commands print a bounded output tail plus the absolute log path. `meta.json` records the VCS identity the run executed against (`head`, `branch`, `dirty`, all null outside a git repository) plus the writing `pid`; it is written at run start with status `running` and rewritten on completion, and a `running` record whose process is gone is reclassified as `killed` on a later run. Pruning keeps the newest passing run of every change indefinitely, so the evidence an archived change cites stays on disk; the retention count applies only to non-passing runs — failed, timed out, interrupted, superseded by a newer pass of the same change, unbound to a change, or missing a readable `meta.json`. The count defaults to 10, is set project-wide by `runLogRetention` in `.grace-lint.json`, and is overridden per run by `--keepRuns N`. `--keepRuns 0` keeps no non-passing runs at all, which deletes the current run as soon as it fails and leaves its printed log path dangling. Interrupted runs (SIGINT/SIGTERM) kill the whole command process group, record `interrupted` status in meta.json, and exit 130.</command_run_contract>
