@@ -88,6 +88,7 @@ For a new GRACE 4 project:
 7. Run `grace status --path /path/to/project --json`.
 8. Run `$grace-execute` and choose sequential or parallel-safe mode. Parallel-safe mode additionally requires `grace lint --path /path/to/project --parallel-preflight`.
 9. Before apply/archive, run `grace lint --path /path/to/project --change C-ID --assertions final`; add `--run-commands` when the target declares `MustPassCommand`.
+10. Archive the applied bundle with `grace archive --path /path/to/project --change C-ID`. It requires a passing final run, refuses a dirty index, flips both statuses to `applied`, stages the move, and never commits.
 
 Existing GRACE 3 projects should run `$grace-migrate` and review the migration report before writing `.grace` artifacts.
 
@@ -130,6 +131,12 @@ Migration cleanup is separately gated: successful current lint, fresh status pro
 | `grace verification find <query> --path <root>` | Search verification projection entries |
 | `grace verification show <id-or-module> --path <root>` | Show one verification entry and module context |
 | `grace file show <path> --path <root>` | Show file-local `MODULE_CONTRACT`, `MODULE_MAP`, and `CHANGE_SUMMARY` |
+| `grace archive --path <root> --change C-ID [--record-file FILE]` | Archive an applied bundle: require a passing `--assertions final --run-commands` run, refuse staged non-bundle files, flip `spec.xml` and `plan.xml` to `applied`, and move the bundle to `.grace/changes/archive/` without committing |
+
+`grace archive` verifies every precondition before it writes anything, so a refusal never leaves a half-archived bundle. Its evidence is the most recent run
+recorded for the change in `--assertions final` mode, which must have status `passed`; a plan that declares no `MustPassCommand` records no run at all and cannot
+be archived. Until `meta.json` records VCS identity the command matches on run identity only and warns that it cannot confirm the evidence describes the current
+tree. `--record-file` is validated as present and non-empty; GRACE never reads, rewrites, or copies the record, because its shape is project policy.
 
 `MustPassCommand` entries are leaf project evidence such as tests, typecheck, build, format, or package checks. Do not nest `grace lint`, `grace status`, or another GRACE lifecycle command inside plan assertions; selected target/final lint is the external orchestration gate.
 
@@ -142,6 +149,7 @@ Output modes:
 - `grace verification find`: `table`, `json`
 - `grace verification show`: `text`, `json`
 - `grace file show`: `text`, `json`
+- `grace archive`: `text`, `json`
 
 Lint, status, and projection-backed navigation fail closed: invalid options, invalid grammar, malformed active assertions/scopes, duplicate ownership, missing routed files, or ambiguous targets produce structured results or a nonzero error envelope. JSON command failures emit one stable `{ "schemaVersion": "1.0.0", "ok": false, "error": { ... } }` envelope on stdout; text failures emit one concise actionable line without a stack trace.
 

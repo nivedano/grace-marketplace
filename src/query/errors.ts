@@ -1,5 +1,5 @@
 /** Stable user-facing query command error code. */
-export type GraceCommandErrorCode = "invalid-project" | "not-found" | "ambiguous-target" | "invalid-arguments";
+export type GraceCommandErrorCode = "invalid-project" | "not-found" | "ambiguous-target" | "invalid-arguments" | "precondition-failed";
 
 /** Error intentionally safe to render without a stack trace. */
 export class GraceCommandError extends Error {
