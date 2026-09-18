@@ -86,7 +86,7 @@ For a new GRACE 4 project:
 5. Before observed writes begin, run the active-baseline preflight: `grace lint --path /path/to/project --assertions current`.
 6. Run `grace lint --path /path/to/project --change C-ID --assertions baseline` before execution; add `--run-commands` when the baseline declares `MustPassCommand`.
 7. Run `grace status --path /path/to/project --json`.
-8. Run `$grace-execute` and choose sequential or parallel-safe mode. Parallel-safe mode additionally requires `grace lint --path /path/to/project --parallel-preflight`.
+8. Run `$grace-execute` and choose sequential or parallel-safe mode. Parallel-safe mode additionally requires `grace lint --path /path/to/project --parallel-preflight`. When plan tasks declare the optional `<WriteScope>` child of `T-NNN`, add `--change C-ID` to get a per-pair disjointness verdict for the tasks that mode may run concurrently.
 9. Before apply/archive, run `grace lint --path /path/to/project --change C-ID --assertions final`; add `--run-commands` when the target declares `MustPassCommand`.
 
 Existing GRACE 3 projects should run `$grace-migrate` and review the migration report before writing `.grace` artifacts.
@@ -123,6 +123,7 @@ Migration cleanup is separately gated: successful current lint, fresh status pro
 | `grace lint --path <root> --change C-ID --assertions target --run-commands` | Validate selected target assertions and explicitly opt into `MustPassCommand` execution |
 | `grace lint --path <root> --change C-ID --assertions final [--run-commands]` | Run the final full-project gate, evaluate the selected target, and keep unrelated approved baselines active without re-evaluating the selected baseline |
 | `grace lint --path <root> --parallel-preflight` | Run the explicit approved-plan scope coexistence gate required for parallel-safe execution |
+| `grace lint --path <root> --parallel-preflight --change C-ID` | Additionally report a `disjoint`/`overlap`/`undeclared` verdict for every pair of that plan's tasks with no `DependsOn` path between them, from their optional per-task `<WriteScope>` |
 | `grace status --path <root>` | Report durable health, stale plans, scope conflicts, and explained/unexplained observed git drift |
 | `grace module find <query> --path <root>` | Search graph projection modules by id, path, text, dependency, or verification id |
 | `grace module show <id-or-path> --path <root>` | Show graph projection context and linked file-local markup |

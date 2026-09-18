@@ -315,6 +315,24 @@ describe("GRACE 4 Artifact Grammar", () => {
     expect(resultCodes).toContain("change.task-dependency-cycle");
   });
 
+  it("accepts an optional task WriteScope and rejects malformed or duplicated ones", () => {
+    const declared = validPlan(
+      task("T-001").replace("</T-001>", "<WriteScope><File>src/example.ts</File></WriteScope></T-001>")
+        + task("T-002").replace("</T-002>", "<WriteScope><None /></WriteScope></T-002>"),
+    );
+    expect(codes(validateChangeArtifact(parseGraceXmlArtifact("plan.xml", declared), "active"))).not.toContain("change.task-invalid-write-scope");
+
+    const malformed = validPlan(
+      task("T-001").replace("</T-001>", "<WriteScope><Module>M-EXAMPLE</Module></WriteScope></T-001>")
+        + task("T-002").replace("</T-002>", "<WriteScope></WriteScope><WriteScope><File>src/example.ts</File></WriteScope></T-002>"),
+    );
+    const malformedResult = validateChangeArtifact(parseGraceXmlArtifact("plan.xml", malformed), "active");
+    expect(codes(malformedResult)).toContain("change.task-invalid-write-scope");
+    expect(codes(malformedResult)).toContain("change.task-duplicate-section");
+    expect(malformedResult.issues.find((entry) => entry.code === "change.task-invalid-write-scope")?.message)
+      .toContain("T-001 <WriteScope> does not allow child <Module>");
+  });
+
   it("no longer drops unknown child-tag dependencies silently and hints the multi-dependency form", () => {
     const plan = validPlan(task("T-001") + task("T-002", "<T-999 />"));
     const result = validateChangeArtifact(parseGraceXmlArtifact("plan.xml", plan), "active");

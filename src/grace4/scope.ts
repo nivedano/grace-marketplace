@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 
+import { parseTaskDependencies } from "./grammar";
 import { ProjectPathError, normalizeProjectRelativePath, resolveContainedProjectPath } from "./paths";
 import type { GraphProjection, VerificationProjection } from "./projections";
 import { ANCHOR_PATTERNS, GRACE4_CONTEXT_ARTIFACTS, type Grace4Issue, type Grace4ProjectPaths } from "./types";
@@ -39,6 +40,30 @@ export type DurableOwnershipIndex = {
   verificationDocuments: Map<string, Set<string>>;
 };
 
+/** One ImplementationPlan task with its optional narrowed write scope. */
+export type TaskWriteScope = {
+  taskId: string;
+  dependsOn: string[];
+  /** True only when the task declares an explicit <WriteScope>. */
+  declared: boolean;
+  scope: ObservedWriteScope;
+};
+
+/** Pairwise concurrency verdict for two tasks with no dependency path between them. */
+export type ParallelTaskVerdict = {
+  left: string;
+  right: string;
+  verdict: "disjoint" | "overlap" | "undeclared";
+  overlaps: string[];
+};
+
+/** Per-task parallel preflight result for one selected change. */
+export type ParallelTaskPreflight = {
+  changeId: string;
+  pairs: ParallelTaskVerdict[];
+  issues: Grace4Issue[];
+};
+
 /** Active change summary used for overlap detection and status reporting. */
 export type ActiveChangeScope = {
   changeId: string;
@@ -47,6 +72,7 @@ export type ActiveChangeScope = {
   planStatus?: string;
   durable: DurableScope;
   observedWrites: ObservedWriteScope;
+  tasks: TaskWriteScope[];
   issues: Grace4Issue[];
 };
 
@@ -270,6 +296,7 @@ function readActiveChangeScope(paths: Grace4ProjectPaths, bundlePath: string, ch
 
   const durable = extractDurableScope(plan.root, planFile);
   const observed = extractObservedWriteScope(plan.root, paths.root, planFile);
+  const tasks = extractTaskWriteScopes(plan.root, observed.scope, paths.root, planFile);
   return {
     changeId,
     bundlePath,
@@ -277,8 +304,157 @@ function readActiveChangeScope(paths: Grace4ProjectPaths, bundlePath: string, ch
     planStatus,
     durable: durable.scope,
     observedWrites: observed.scope,
-    issues: [...durable.issues, ...observed.issues],
+    tasks: tasks.tasks,
+    issues: [...durable.issues, ...observed.issues, ...tasks.issues],
   };
+}
+
+/**
+ * Reads every ImplementationPlan task, its predecessors, and its optional <WriteScope>.
+ *
+ * A declared task scope must be a subset of the plan ObservedWriteScope: every File/Path must be
+ * covered by the plan scope, and every Glob must repeat a plan Glob verbatim. Glob narrowing is
+ * deliberately not inferred, because there is no glob-containment helper and an unsound
+ * approximation would let a task escape the plan scope.
+ */
+function extractTaskWriteScopes(
+  root: GraceXmlNode,
+  planScope: ObservedWriteScope,
+  projectRoot: string,
+  planFile: string,
+): { tasks: TaskWriteScope[]; issues: Grace4Issue[] } {
+  const implementationPlan = [...walkNodes(root)].find((node) => node.tag === "ImplementationPlan");
+  const tasks: TaskWriteScope[] = [];
+  const issues: Grace4Issue[] = [];
+  if (!implementationPlan) {
+    return { tasks, issues };
+  }
+
+  const caseSensitive = defaultCaseSensitivity();
+  for (const task of implementationPlan.children.filter((child) => ANCHOR_PATTERNS.task.test(child.tag))) {
+    const scopeNode = task.children.find((child) => child.tag === "WriteScope");
+    const dependsOn = parseTaskDependencies(task).dependencies;
+    if (!scopeNode) {
+      tasks.push({ taskId: task.tag, dependsOn, declared: false, scope: { files: [], globs: [] } });
+      continue;
+    }
+
+    const label = `${task.tag}/WriteScope`;
+    const entries = readWriteScopeEntries(scopeNode, projectRoot, planFile, label, "scope.invalid-task-write-scope");
+    issues.push(...entries.issues);
+    if (entries.hasNone && entries.scope.files.length + entries.scope.globs.length > 0) {
+      issues.push(issue("error", "scope.none-with-entries", planFile, `${label}/None cannot be combined with write scope entries.`));
+    } else if (!entries.hasNone && entries.scope.files.length + entries.scope.globs.length === 0) {
+      issues.push(issue("error", "scope.invalid-task-write-scope", planFile, `${label} must declare at least one File/Path/Glob or an explicit <None /> marker.`));
+    }
+
+    for (const file of entries.scope.files) {
+      if (!observedWriteScopeContains(planScope, file)) {
+        issues.push(issue("error", "scope.task-write-scope-escape", planFile, `${label} entry ${file} is outside the plan ObservedWriteScope.`));
+      }
+    }
+    for (const glob of entries.scope.globs) {
+      if (!planScope.globs.some((planGlob) => equalPath(planGlob, glob, caseSensitive))) {
+        issues.push(issue("error", "scope.task-write-scope-escape", planFile, `${label} glob ${glob} must repeat a plan ObservedWriteScope glob verbatim.`));
+      }
+    }
+
+    tasks.push({ taskId: task.tag, dependsOn, declared: true, scope: entries.scope });
+  }
+
+  return { tasks, issues };
+}
+
+/**
+ * Returns disjointness verdicts for every task pair with no dependency path in either direction.
+ *
+ * Only pairs where both tasks declare a <WriteScope> can be proven disjoint; an undeclared task
+ * keeps the whole-plan scope and stays unverdicted, so a plan without per-task scopes reports
+ * nothing new. Comparison is O(n^2) over plan tasks, which are tens of entries at most.
+ */
+export function detectUnsafeConcurrentTasks(change: ActiveChangeScope): ParallelTaskPreflight {
+  const tasks = change.tasks;
+  const planFile = path.join(change.bundlePath, "plan.xml");
+  const known = new Set(tasks.map((task) => task.taskId));
+  const predecessors = new Map(tasks.map((task) => [task.taskId, task.dependsOn.filter((dependency) => known.has(dependency))]));
+
+  const cyclic = findCyclicTasks(predecessors);
+  if (cyclic.length > 0) {
+    return {
+      changeId: change.changeId,
+      pairs: [],
+      issues: [issue("error", "scope.parallel-task-graph-unresolvable", planFile, `${change.changeId} task dependencies are not a DAG; parallel preflight refuses to order ${cyclic.join(", ")}.`)],
+    };
+  }
+
+  const reachable = new Map(tasks.map((task) => [task.taskId, transitivePredecessors(task.taskId, predecessors)]));
+  const caseSensitive = detectScopeCaseSensitivity([change]);
+  const pairs: ParallelTaskVerdict[] = [];
+  const issues: Grace4Issue[] = [];
+  for (let index = 0; index < tasks.length; index += 1) {
+    for (let next = index + 1; next < tasks.length; next += 1) {
+      const left = tasks[index]!;
+      const right = tasks[next]!;
+      if (reachable.get(left.taskId)?.has(right.taskId) || reachable.get(right.taskId)?.has(left.taskId)) {
+        continue;
+      }
+      if (!left.declared || !right.declared) {
+        pairs.push({ left: left.taskId, right: right.taskId, verdict: "undeclared", overlaps: [] });
+        continue;
+      }
+      const overlaps = observedWriteOverlaps(left.scope, right.scope, caseSensitive);
+      pairs.push({ left: left.taskId, right: right.taskId, verdict: overlaps.length > 0 ? "overlap" : "disjoint", overlaps });
+      if (overlaps.length > 0) {
+        issues.push(issue("error", "scope.parallel-task-write-overlap", planFile, `${left.taskId} and ${right.taskId} are independent but cannot run in parallel; overlapping writes: ${overlaps.join(", ")}.`));
+      }
+    }
+  }
+  return { changeId: change.changeId, pairs, issues };
+}
+
+/** Returns the tasks involved in a dependency cycle, including self-dependencies. */
+function findCyclicTasks(predecessors: Map<string, string[]>): string[] {
+  const state = new Map<string, "visiting" | "visited">();
+  const cyclic = new Set<string>();
+  const visit = (taskId: string, stack: string[]): void => {
+    if (state.get(taskId) === "visited") {
+      return;
+    }
+    if (state.get(taskId) === "visiting") {
+      for (const member of stack.slice(stack.indexOf(taskId))) {
+        cyclic.add(member);
+      }
+      return;
+    }
+    state.set(taskId, "visiting");
+    for (const dependency of predecessors.get(taskId) ?? []) {
+      if (dependency === taskId) {
+        cyclic.add(taskId);
+        continue;
+      }
+      visit(dependency, [...stack, dependency]);
+    }
+    state.set(taskId, "visited");
+  };
+  for (const taskId of predecessors.keys()) {
+    visit(taskId, [taskId]);
+  }
+  return [...cyclic].sort();
+}
+
+/** Returns every task reachable by following DependsOn edges; the visited set bounds the walk. */
+function transitivePredecessors(taskId: string, predecessors: Map<string, string[]>): Set<string> {
+  const reached = new Set<string>();
+  const queue = [...(predecessors.get(taskId) ?? [])];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (reached.has(current)) {
+      continue;
+    }
+    reached.add(current);
+    queue.push(...(predecessors.get(current) ?? []));
+  }
+  return reached;
 }
 
 function extractDurableScope(root: GraceXmlNode, planFile: string): { scope: DurableScope; issues: Grace4Issue[] } {
@@ -395,27 +571,52 @@ function extractObservedWriteScope(
     return { scope, issues };
   }
 
-  if (scopeNode.text.trim() || Object.keys(scopeNode.attributes).length > 0) {
-    issues.push(issue("error", "scope.invalid-observed-shape", planFile, "ObservedWriteScope must contain only File, Path, Glob, or None elements."));
+  const parsed = readWriteScopeEntries(scopeNode, projectRoot, planFile, "ObservedWriteScope", "scope.invalid-observed-shape");
+  issues.push(...parsed.issues);
+  scope.files = parsed.scope.files;
+  scope.globs = parsed.scope.globs;
+  const hasNone = parsed.hasNone;
+  const entries = scope.files.length + scope.globs.length;
+  if (hasNone && entries > 0) {
+    issues.push(issue("error", "scope.none-with-entries", planFile, "ObservedWriteScope/None cannot be combined with observed write entries."));
+  } else if (!hasNone && entries === 0) {
+    issues.push(issue("error", "scope.empty-observed-write-scope", planFile, "ObservedWriteScope must declare at least one File/Path/Glob or an explicit <None /> marker."));
   }
+  return { scope, issues };
+}
 
+/** Parses the File/Path/Glob/None entry grammar shared by ObservedWriteScope and task WriteScope. */
+function readWriteScopeEntries(
+  scopeNode: GraceXmlNode,
+  projectRoot: string,
+  planFile: string,
+  label: string,
+  shapeCode: string,
+): { scope: ObservedWriteScope; hasNone: boolean; issues: Grace4Issue[] } {
+  const scope: ObservedWriteScope = { files: [], globs: [] };
+  const issues: Grace4Issue[] = [];
   const fileValues: string[] = [];
   const globValues: string[] = [];
   let hasNone = false;
+
+  if (scopeNode.text.trim() || Object.keys(scopeNode.attributes).length > 0) {
+    issues.push(issue("error", shapeCode, planFile, `${label} must contain only File, Path, Glob, or None elements.`));
+  }
+
   for (const child of scopeNode.children) {
     if (child.tag === "None") {
       if (child.text.trim() || child.children.length > 0 || Object.keys(child.attributes).length > 0) {
-        issues.push(issue("error", "scope.invalid-observed-shape", planFile, "ObservedWriteScope/None must be an empty attribute-free element."));
+        issues.push(issue("error", shapeCode, planFile, `${label}/None must be an empty attribute-free element.`));
       }
       hasNone = true;
       continue;
     }
     if (!["File", "Path", "Glob"].includes(child.tag)) {
-      issues.push(issue("error", "scope.invalid-observed-shape", planFile, `ObservedWriteScope does not allow child <${child.tag}>.`));
+      issues.push(issue("error", shapeCode, planFile, `${label} does not allow child <${child.tag}>.`));
       continue;
     }
     if (child.children.length > 0 || Object.keys(child.attributes).length > 0 || !child.text.trim()) {
-      issues.push(issue("error", "scope.invalid-observed-shape", planFile, `ObservedWriteScope/${child.tag} must be a non-empty plain text field.`));
+      issues.push(issue("error", shapeCode, planFile, `${label}/${child.tag} must be a non-empty plain text field.`));
       continue;
     }
     if (child.tag === "Glob") globValues.push(child.text.trim());
@@ -439,13 +640,7 @@ function extractObservedWriteScope(
   }
   scope.files = [...new Set(scope.files)].sort();
   scope.globs = [...new Set(scope.globs)].sort();
-  const entries = scope.files.length + scope.globs.length;
-  if (hasNone && entries > 0) {
-    issues.push(issue("error", "scope.none-with-entries", planFile, "ObservedWriteScope/None cannot be combined with observed write entries."));
-  } else if (!hasNone && entries === 0) {
-    issues.push(issue("error", "scope.empty-observed-write-scope", planFile, "ObservedWriteScope must declare at least one File/Path/Glob or an explicit <None /> marker."));
-  }
-  return { scope, issues };
+  return { scope, hasNone, issues };
 }
 
 function forEachApprovedPair(changes: ActiveChangeScope[], callback: (left: ActiveChangeScope, right: ActiveChangeScope) => void) {

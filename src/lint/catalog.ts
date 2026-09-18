@@ -48,6 +48,26 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
     explanation: "Two or more active change scopes write to overlapping regions, which can cause unsafe concurrent execution.",
     remediation: ["Do not run overlapping observed writes in parallel-safe mode.", "Sequence the changes or split scopes to eliminate the overlap."],
   },
+  "scope.task-write-scope-escape": {
+    title: "Task Write Scope Escapes The Plan",
+    explanation: "A T-NNN task declares a <WriteScope> entry that the plan's ObservedWriteScope does not cover. A per-task scope may only narrow the plan scope, never widen it. Globs must repeat a plan glob verbatim, because glob narrowing is not inferred.",
+    remediation: ["Remove the entry from the task, or add it to the plan ObservedWriteScope and replan.", "Replace a narrowed glob with explicit <File> entries, or repeat the plan glob verbatim."],
+  },
+  "scope.parallel-task-write-overlap": {
+    title: "Independent Tasks Write To The Same Place",
+    explanation: "Two tasks of the selected change have no dependency path between them, so parallel-safe mode may run them concurrently, but their declared <WriteScope> entries overlap.",
+    remediation: ["Split the overlapping files so each task owns its own write surface.", "Or add a DependsOn edge that makes the real ordering explicit and run the pair sequentially."],
+  },
+  "scope.parallel-task-graph-unresolvable": {
+    title: "Task Dependency Graph Is Not A DAG",
+    explanation: "Per-task parallel preflight cannot decide which tasks are independent because the DependsOn edges contain a cycle or a self-dependency.",
+    remediation: ["Break the dependency cycle reported in the message so DependsOn forms a directed acyclic graph.", "Rerun the preflight once grammar validation reports no change.task-dependency-cycle."],
+  },
+  "scope.parallel-change-not-found": {
+    title: "Parallel Preflight Change Not Found",
+    explanation: "--parallel-preflight was given a --change identifier that does not name an active bundle with a readable draft or approved plan.xml.",
+    remediation: ["Check the C-* identifier against .grace/changes/active.", "Drop --change to run the cross-change preflight only."],
+  },
   "change.superseded-missing-replacement": {
     title: "Superseded Change Missing Replacement Reference",
     explanation: "A GraceChangeSpec or GraceChangePlan with status='superseded' should name the replacement C-* anchor via a <Replacement> or <ReplacementChange> child tag.",

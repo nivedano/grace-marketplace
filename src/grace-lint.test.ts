@@ -75,6 +75,8 @@ function writeApprovedChange(
   baselineAssertions: string,
   targetAssertions: string,
   status: "draft" | "approved" = "approved",
+  observedWriteScope = `<File>src/example.ts</File>`,
+  tasks = `<T-001><Title>Verify assertions</Title><DependsOn></DependsOn><AcceptanceCriteria><Criterion>Assertions pass.</Criterion></AcceptanceCriteria><Verification><Command>bun test</Command></Verification></T-001>`,
 ) {
   const bundle = `.grace/changes/active/${changeId}`;
   writeProjectFile(
@@ -85,7 +87,7 @@ function writeApprovedChange(
   writeProjectFile(
     root,
     `${bundle}/plan.xml`,
-    `<GraceChangePlan graceVersion="4.0" status="${status}"><${changeId}><IntentSummary>Evaluate selected assertions.</IntentSummary><BaselineAssertions>${baselineAssertions}</BaselineAssertions><TargetAssertions>${targetAssertions}</TargetAssertions><DurableScope><GraphAnchors><M-EXAMPLE /></GraphAnchors></DurableScope><ObservedWriteScope><File>src/example.ts</File></ObservedWriteScope><ImplementationPlan><T-001><Title>Verify assertions</Title><DependsOn></DependsOn><AcceptanceCriteria><Criterion>Assertions pass.</Criterion></AcceptanceCriteria><Verification><Command>bun test</Command></Verification></T-001></ImplementationPlan></${changeId}></GraceChangePlan>`,
+    `<GraceChangePlan graceVersion="4.0" status="${status}"><${changeId}><IntentSummary>Evaluate selected assertions.</IntentSummary><BaselineAssertions>${baselineAssertions}</BaselineAssertions><TargetAssertions>${targetAssertions}</TargetAssertions><DurableScope><GraphAnchors><M-EXAMPLE /></GraphAnchors></DurableScope><ObservedWriteScope>${observedWriteScope}</ObservedWriteScope><ImplementationPlan>${tasks}</ImplementationPlan></${changeId}></GraceChangePlan>`,
   );
 }
 
@@ -553,6 +555,43 @@ function Publish-Artifacts {
     const preflightCodes = (await lintGraceProject(root, { parallelPreflight: true })).issues.map((issue) => issue.code);
     expect(preflightCodes).toContain("scope.parallel-durable-overlap");
     expect(preflightCodes).toContain("scope.observed-write-overlap");
+  });
+
+  it("reports per-task write scope verdicts only for a selected parallel preflight change", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeApprovedChange(
+      root,
+      "C-TASK-SCOPES",
+      `<MustExist><Value>M-EXAMPLE</Value></MustExist>`,
+      `<MustVerify><Module>M-EXAMPLE</Module></MustVerify>`,
+      "approved",
+      `<Glob>src/**</Glob>`,
+      `<T-001><Title>First</Title><DependsOn></DependsOn><WriteScope><File>src/one.ts</File></WriteScope><AcceptanceCriteria><Criterion>Done.</Criterion></AcceptanceCriteria><Verification><Command>bun test</Command></Verification></T-001>`
+        + `<T-002><Title>Second</Title><DependsOn></DependsOn><WriteScope><File>src/one.ts</File><File>src/two.ts</File></WriteScope><AcceptanceCriteria><Criterion>Done.</Criterion></AcceptanceCriteria><Verification><Command>bun test</Command></Verification></T-002>`,
+    );
+
+    const plain = await lintGraceProject(root);
+    expect(plain.issues.map((issue) => issue.code)).not.toContain("scope.parallel-task-write-overlap");
+    expect(plain.parallelTasks).toBeUndefined();
+
+    const unselected = await lintGraceProject(root, { parallelPreflight: true });
+    expect(unselected.issues.map((issue) => issue.code)).not.toContain("scope.parallel-task-write-overlap");
+    expect(unselected.parallelTasks).toBeUndefined();
+
+    const selected = await lintGraceProject(root, { parallelPreflight: true, changeId: "C-TASK-SCOPES" });
+    const overlap = selected.issues.find((issue) => issue.code === "scope.parallel-task-write-overlap");
+    expect(overlap?.severity).toBe("error");
+    expect(overlap?.message).toContain("T-001 and T-002");
+    expect(overlap?.title).toBe("Independent Tasks Write To The Same Place");
+    expect(selected.parallelTasks).toEqual({
+      changeId: "C-TASK-SCOPES",
+      pairs: [{ left: "T-001", right: "T-002", verdict: "overlap", overlaps: ["src/one.ts"] }],
+    });
+    expect(formatTextReport(selected)).toContain("Parallel task preflight (C-TASK-SCOPES)");
+
+    const missing = await lintGraceProject(root, { parallelPreflight: true, changeId: "C-ABSENT" });
+    expect(missing.issues.map((issue) => issue.code)).toContain("scope.parallel-change-not-found");
   });
 
   it("does not evaluate BaselineAssertions for active draft plans", async () => {

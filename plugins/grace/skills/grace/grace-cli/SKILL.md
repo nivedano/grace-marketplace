@@ -11,7 +11,7 @@ description: Operate the GRACE 4 CLI for .grace linting, status, module navigati
 - Selected baseline: `grace lint --path PROJECT --change C-ID --assertions baseline` (add `--run-commands` when the baseline declares `MustPassCommand`)
 - Selected target: `grace lint --path PROJECT --change C-ID --assertions target --run-commands`
 - Final execution gate: `grace lint --path PROJECT --change C-ID --assertions final --run-commands`
-- Parallel preflight: `grace lint --path PROJECT --parallel-preflight`
+- Parallel preflight: `grace lint --path PROJECT --parallel-preflight` (add `--change C-ID` for per-task write-scope verdicts)
 - Status: `grace status --path PROJECT --with modules --json`
 - Navigation: `grace module find|show`, `grace verification find|show`, and `grace file show`.
 </commands>

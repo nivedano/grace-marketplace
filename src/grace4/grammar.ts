@@ -774,16 +774,39 @@ function validatePlanTask(file: string, task: GraceXmlNode, issues: Grace4Issue[
     }
   }
 
+  validateTaskWriteScope(file, task, issues);
+
+  const parsed = parseTaskDependencies(task);
+  for (const invalid of parsed.invalid) {
+    issues.push(issue(
+      "error",
+      "change.task-invalid-dependency",
+      file,
+      `${task.tag} dependency '${invalid}' must be a canonical T-NNN identifier. ` +
+        `List multiple predecessors comma-separated in one element: <DependsOn>T-001, T-002</DependsOn>.`,
+    ));
+  }
+  for (const duplicate of parsed.duplicates) {
+    issues.push(issue("error", "change.task-duplicate-dependency", file, `${task.tag} repeats dependency ${duplicate}.`));
+  }
+  return parsed.dependencies;
+}
+
+/**
+ * Parses every accepted DependsOn spelling into canonical, invalid, and repeated predecessors.
+ *
+ * Multiple predecessors are allowed. Accepted forms, all equivalent:
+ *   <DependsOn>T-001, T-002</DependsOn>            comma/space-separated text (canonical)
+ *   <DependsOn>T-001 T-002</DependsOn>              space-separated text
+ *   <DependsOn><T-001 /><T-002 /></DependsOn>       child anchor tags
+ *   <DependsOn><Task>T-001</Task></DependsOn>       legacy child text
+ */
+export function parseTaskDependencies(task: GraceXmlNode): { dependencies: string[]; invalid: string[]; duplicates: string[] } {
   const dependsOn = task.children.find((child) => child.tag === "DependsOn");
   if (!dependsOn) {
-    return [];
+    return { dependencies: [], invalid: [], duplicates: [] };
   }
 
-  // Multiple predecessors are allowed. Accepted forms, all equivalent:
-  //   <DependsOn>T-001, T-002</DependsOn>            comma/space-separated text (canonical)
-  //   <DependsOn>T-001 T-002</DependsOn>              space-separated text
-  //   <DependsOn><T-001 /><T-002 /></DependsOn>       child anchor tags
-  //   <DependsOn><Task>T-001</Task></DependsOn>       legacy child text
   const dependencyValues = [
     ...dependsOn.text.split(/[,\s]+/),
     ...dependsOn.children
@@ -796,26 +819,44 @@ function validatePlanTask(file: string, task: GraceXmlNode, issues: Grace4Issue[
     .map((value) => value.trim())
     .filter(Boolean);
   const dependencies: string[] = [];
+  const invalid: string[] = [];
+  const duplicates: string[] = [];
   const seen = new Set<string>();
   for (const dependency of dependencyValues) {
     if (!ANCHOR_PATTERNS.task.test(dependency)) {
-      issues.push(issue(
-        "error",
-        "change.task-invalid-dependency",
-        file,
-        `${task.tag} dependency '${dependency}' must be a canonical T-NNN identifier. ` +
-          `List multiple predecessors comma-separated in one element: <DependsOn>T-001, T-002</DependsOn>.`,
-      ));
+      invalid.push(dependency);
       continue;
     }
     if (seen.has(dependency)) {
-      issues.push(issue("error", "change.task-duplicate-dependency", file, `${task.tag} repeats dependency ${dependency}.`));
+      duplicates.push(dependency);
       continue;
     }
     seen.add(dependency);
     dependencies.push(dependency);
   }
-  return dependencies;
+  return { dependencies, invalid, duplicates };
+}
+
+/** Validates the optional per-task <WriteScope>, which narrows the plan ObservedWriteScope. */
+function validateTaskWriteScope(file: string, task: GraceXmlNode, issues: Grace4Issue[]): void {
+  const writeScopes = task.children.filter((child) => child.tag === "WriteScope");
+  if (writeScopes.length > 1) {
+    issues.push(issue("error", "change.task-duplicate-section", file, `${task.tag} contains duplicate direct <WriteScope> sections.`));
+  }
+
+  for (const writeScope of writeScopes) {
+    if (writeScope.text.trim() || Object.keys(writeScope.attributes).length > 0) {
+      issues.push(issue("error", "change.task-invalid-write-scope", file, `${task.tag} <WriteScope> must contain only File, Path, Glob, or None elements.`));
+    }
+    for (const child of writeScope.children) {
+      if (!OBSERVED_SCOPE_DIRECT_TAGS.has(child.tag)) {
+        issues.push(issue("error", "change.task-invalid-write-scope", file, `${task.tag} <WriteScope> does not allow child <${child.tag}>.`));
+      }
+    }
+    if (writeScope.children.filter((child) => OBSERVED_SCOPE_DIRECT_TAGS.has(child.tag)).length === 0) {
+      issues.push(issue("error", "change.task-invalid-write-scope", file, `${task.tag} <WriteScope> must declare File/Path/Glob entries or <None />.`));
+    }
+  }
 }
 
 function validateTaskDependencyGraph(file: string, tasks: GraceXmlNode[], issues: Grace4Issue[]): void {

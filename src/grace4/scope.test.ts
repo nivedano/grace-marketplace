@@ -8,6 +8,7 @@ import {
   collectActiveChangeScopes,
   detectScopeOverlaps,
   detectUnsafeConcurrentExecution,
+  detectUnsafeConcurrentTasks,
   durableOverlaps,
   parseScopeGlob,
   scopeGlobsOverlap,
@@ -189,5 +190,113 @@ describe("GRACE 4 scope detector", () => {
     expect(messages.some((message) => message.includes("C-FILE") && message.includes("C-GLOB"))).toBe(true);
     expect(messages.some((message) => message.includes("C-GLOB") && message.includes("C-NESTED"))).toBe(true);
     expect(messages.some((message) => message.includes("C-DISJOINT"))).toBe(false);
+  });
+});
+
+function writeTaskScopedChange(root: string, changeId: string, planScope: string, tasks: string) {
+  const bundle = `.grace/changes/active/${changeId}`;
+  writeProjectFile(root, `${bundle}/spec.xml`, `<GraceChangeSpec graceVersion="4.0" status="approved"><${changeId} /></GraceChangeSpec>`);
+  writeProjectFile(
+    root,
+    `${bundle}/plan.xml`,
+    `<GraceChangePlan graceVersion="4.0" status="approved"><${changeId}><DurableScope><None /></DurableScope><ObservedWriteScope>${planScope}</ObservedWriteScope><ImplementationPlan>${tasks}</ImplementationPlan></${changeId}></GraceChangePlan>`,
+  );
+}
+
+function task(taskId: string, dependsOn: string, writeScope: string | null) {
+  return `<${taskId}><Title>${taskId}</Title><DependsOn>${dependsOn}</DependsOn>`
+    + (writeScope === null ? "" : `<WriteScope>${writeScope}</WriteScope>`)
+    + `<AcceptanceCriteria><Criterion>Done.</Criterion></AcceptanceCriteria><Verification><Command>bun test</Command></Verification></${taskId}>`;
+}
+
+function selectChange(root: string, changeId: string) {
+  const scopes = collectActiveChangeScopes(resolveGrace4Paths(root));
+  const change = scopes.find((scope) => scope.changeId === changeId);
+  if (!change) {
+    throw new Error(`Missing change ${changeId}`);
+  }
+  return change;
+}
+
+describe("GRACE 4 per-task write scope", () => {
+  it("rejects a task write scope entry outside the plan ObservedWriteScope", () => {
+    const root = createProject();
+    writeTaskScopedChange(
+      root,
+      "C-ESCAPE",
+      `<File>src/lint/core.ts</File><Glob>src/grace4/**</Glob>`,
+      task("T-001", "", `<File>src/grace4/scope.ts</File>`) + task("T-002", "", `<File>docs/outside.md</File><Glob>tests/**</Glob>`),
+    );
+
+    const change = selectChange(root, "C-ESCAPE");
+    const escapes = change.issues.filter((entry) => entry.code === "scope.task-write-scope-escape");
+
+    expect(escapes.map((entry) => entry.severity)).toEqual(["error", "error"]);
+    expect(escapes.some((entry) => entry.message.includes("T-002/WriteScope entry docs/outside.md"))).toBe(true);
+    expect(escapes.some((entry) => entry.message.includes("T-002/WriteScope glob tests/**"))).toBe(true);
+    expect(change.issues.some((entry) => entry.message.includes("T-001"))).toBe(false);
+  });
+
+  it("accepts a task glob that repeats a plan glob verbatim", () => {
+    const root = createProject();
+    writeTaskScopedChange(root, "C-GLOB-ECHO", `<Glob>src/**/*.ts</Glob>`, task("T-001", "", `<Glob>src/**/*.ts</Glob>`));
+
+    expect(selectChange(root, "C-GLOB-ECHO").issues).toEqual([]);
+  });
+
+  it("returns a verdict per independent task pair and blocks overlapping writes", () => {
+    const root = createProject();
+    writeTaskScopedChange(
+      root,
+      "C-PAIRS",
+      `<Glob>src/**</Glob>`,
+      task("T-001", "", `<File>src/one.ts</File>`)
+        + task("T-002", "", `<File>src/two.ts</File>`)
+        + task("T-003", "", `<File>src/two.ts</File>`)
+        + task("T-004", "T-001, T-002", `<File>src/four.ts</File>`),
+    );
+
+    const preflight = detectUnsafeConcurrentTasks(selectChange(root, "C-PAIRS"));
+    const verdict = (left: string, right: string) => preflight.pairs.find((pair) => pair.left === left && pair.right === right);
+
+    expect(verdict("T-001", "T-002")?.verdict).toBe("disjoint");
+    expect(verdict("T-002", "T-003")?.verdict).toBe("overlap");
+    expect(verdict("T-002", "T-003")?.overlaps).toEqual(["src/two.ts"]);
+    // T-004 depends on both, so those pairs are ordered and never compared.
+    expect(verdict("T-001", "T-004")).toBeUndefined();
+    expect(verdict("T-003", "T-004")?.verdict).toBe("disjoint");
+    expect(preflight.issues.map((entry) => entry.code)).toEqual(["scope.parallel-task-write-overlap"]);
+    expect(preflight.issues[0]?.severity).toBe("error");
+  });
+
+  it("leaves pairs unverdicted and issue-free when a task declares no write scope", () => {
+    const root = createProject();
+    writeTaskScopedChange(
+      root,
+      "C-UNDECLARED",
+      `<File>src/one.ts</File>`,
+      task("T-001", "", null) + task("T-002", "", null),
+    );
+
+    const preflight = detectUnsafeConcurrentTasks(selectChange(root, "C-UNDECLARED"));
+
+    expect(preflight.pairs).toEqual([{ left: "T-001", right: "T-002", verdict: "undeclared", overlaps: [] }]);
+    expect(preflight.issues).toEqual([]);
+  });
+
+  it("refuses to order a cyclic dependency graph instead of looping", () => {
+    const root = createProject();
+    writeTaskScopedChange(
+      root,
+      "C-CYCLE",
+      `<Glob>src/**</Glob>`,
+      task("T-001", "T-002", `<File>src/one.ts</File>`) + task("T-002", "T-001", `<File>src/one.ts</File>`),
+    );
+
+    const preflight = detectUnsafeConcurrentTasks(selectChange(root, "C-CYCLE"));
+
+    expect(preflight.pairs).toEqual([]);
+    expect(preflight.issues.map((entry) => entry.code)).toEqual(["scope.parallel-task-graph-unresolvable"]);
+    expect(preflight.issues[0]?.message).toContain("T-001, T-002");
   });
 });

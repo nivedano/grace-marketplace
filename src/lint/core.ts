@@ -6,7 +6,7 @@ import { formatDuration, runDeclaredCommands, type CommandRunResult, type Declar
 import { validateGrace4Project } from "../grace4/grammar";
 import { detectGraceProjectKind, formatGrace3MigrationGuidance, resolveGrace4Paths } from "../grace4/project";
 import { buildGraphProjection, buildVerificationProjection, type GraphProjection, type VerificationProjection } from "../grace4/projections";
-import { collectActiveChangeScopes, createDurableOwnershipIndex, detectScopeOverlaps, detectUnsafeConcurrentExecution } from "../grace4/scope";
+import { collectActiveChangeScopes, createDurableOwnershipIndex, detectScopeOverlaps, detectUnsafeConcurrentExecution, detectUnsafeConcurrentTasks, type ActiveChangeScope } from "../grace4/scope";
 import { ANCHOR_PATTERNS, type Grace4Issue, type Grace4ProjectPaths } from "../grace4/types";
 import { readGraceXmlArtifact } from "../grace4/xml";
 import { analyzeGovernedFile, collectCodeFiles, describeUnreadableDirectory, hasGraceMarkers, type UnreadableDirectoryHandler } from "../project-utils";
@@ -280,6 +280,34 @@ function evaluateJob(
   }
 }
 
+/**
+ * Adds per-task disjointness evidence for the change named by --change.
+ *
+ * Draft plans are accepted as well as approved ones: per-task write scopes are a planning-time
+ * question, and the cross-change gate above already covers approved coexistence.
+ */
+function runTaskParallelPreflight(
+  result: LintResult,
+  paths: Grace4ProjectPaths,
+  activeScopes: ActiveChangeScope[],
+  changeId: string,
+): Grace4Issue[] {
+  const selected = activeScopes.find((scope) => scope.changeId === changeId);
+  if (!selected) {
+    addIssue(result, {
+      severity: "error",
+      code: "scope.parallel-change-not-found",
+      file: paths.changesActiveDir,
+      message: `Parallel preflight change '${changeId}' must name one active bundle with a draft or approved plan.xml.`,
+    });
+    return [];
+  }
+
+  const preflight = detectUnsafeConcurrentTasks(selected);
+  result.parallelTasks = { changeId: preflight.changeId, pairs: preflight.pairs };
+  return preflight.issues;
+}
+
 function resolveSelectedApprovedPlan(
   result: LintResult,
   paths: Grace4ProjectPaths,
@@ -378,6 +406,9 @@ export async function lintGraceProject(projectRoot: string, options: LintOptions
   const scopeIssues = activeScopes.flatMap((scope) => scope.issues);
   const overlapIssues = detectScopeOverlaps(activeScopes, ownership);
   const parallelIssues = options.parallelPreflight ? detectUnsafeConcurrentExecution(activeScopes, ownership) : [];
+  if (options.parallelPreflight && options.changeId) {
+    parallelIssues.push(...runTaskParallelPreflight(result, paths, activeScopes, options.changeId));
+  }
   for (const issue of [...scopeIssues, ...overlapIssues, ...parallelIssues]) {
     addGrace4Issue(result, issue);
   }
@@ -422,6 +453,22 @@ export function formatTextReport(result: LintResult, options: { remediate?: bool
     const firstLog = result.commands.find((command) => command.logFile)?.logFile;
     if (firstLog) {
       lines.push(`  Logs: ${path.dirname(firstLog)}`);
+    }
+  }
+
+  if (result.parallelTasks) {
+    lines.push(`Parallel task preflight (${result.parallelTasks.changeId})`);
+    if (result.parallelTasks.pairs.length === 0) {
+      lines.push("  No independent task pairs.");
+    }
+    for (const pair of result.parallelTasks.pairs) {
+      const mark = pair.verdict === "disjoint" ? "✔" : pair.verdict === "overlap" ? "✖" : "-";
+      const detail = pair.verdict === "overlap"
+        ? `overlap: ${pair.overlaps.join(", ")}`
+        : pair.verdict === "undeclared"
+          ? "undeclared: at least one task has no <WriteScope>"
+          : "disjoint";
+      lines.push(`  ${mark} ${pair.left} ↔ ${pair.right} (${detail})`);
     }
   }
 

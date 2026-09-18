@@ -109,7 +109,7 @@ export const lintCommand = defineCommand({
     },
     change: {
       type: "string",
-      description: "Active C-* bundle selected for baseline or target assertion evaluation",
+      description: "Active C-* bundle selected for baseline or target assertion evaluation, or for per-task --parallel-preflight",
     },
     assertions: {
       type: "string",
@@ -138,7 +138,7 @@ export const lintCommand = defineCommand({
     },
     parallelPreflight: {
       type: "boolean",
-      description: "Treat active-plan scope overlap as a parallel-execution blocker",
+      description: "Treat active-plan scope overlap as a parallel-execution blocker; with --change, also report per-task write-scope disjointness",
       default: false,
     },
   },

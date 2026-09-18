@@ -15,10 +15,11 @@ Require one active bundle with approved, identity-matched `spec.xml` and `plan.x
 - Selected target with command evidence: `grace lint --path PROJECT --change C-ID --assertions target --run-commands`
 - Final end-state validation: `grace lint --path PROJECT --change C-ID --assertions final` (add `--run-commands` when the target declares `MustPassCommand`)
 - Parallel preflight: `grace lint --path PROJECT --parallel-preflight`
+- Per-task write-scope verdicts for one plan: `grace lint --path PROJECT --parallel-preflight --change C-ID`
 </assertion_commands>
 
 <mode_selection>
-Wait for explicit `sequential` or `parallel-safe` choice. Parallel-safe requires the explicit preflight to pass. Workers never mutate approved plans; durable `.grace` changes are applied centrally after observed work verifies.
+Wait for explicit `sequential` or `parallel-safe` choice. Parallel-safe requires the explicit preflight to pass. Batch only task pairs the selected per-task preflight reports as `disjoint`; a pair reported `undeclared` has no per-task `WriteScope`, is not proven safe, and runs sequentially. Each worker writes only inside its own task `WriteScope`. Workers never mutate approved plans; durable `.grace` changes are applied centrally after observed work verifies.
 </mode_selection>
 
 <recovery_decision_table>

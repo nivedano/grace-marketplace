@@ -33,6 +33,13 @@
         <!-- Zero or more predecessors, comma-separated: T-001, T-002. List only true
              dependencies — never linearize independent tasks into a chain. -->
         <DependsOn></DependsOn>
+        <!-- Optional. Narrows this task's writes to a subset of the plan ObservedWriteScope so
+             selected parallel preflight can prove independent tasks disjoint. Every File must be
+             covered by the plan scope and a Glob must repeat a plan Glob verbatim; glob narrowing
+             is not inferred. Use <None /> for a task that writes nothing. -->
+        <WriteScope>
+          <File>src/path/to/file.ts</File>
+        </WriteScope>
         <AcceptanceCriteria>
           <Criterion>$TASK_ACCEPTANCE</Criterion>
         </AcceptanceCriteria>

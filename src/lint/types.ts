@@ -30,6 +30,14 @@ export type CommandEvidence = {
   logFile: string | null;
 };
 
+/** One --parallel-preflight verdict for two tasks with no dependency path between them. */
+export type ParallelTaskPairEvidence = {
+  left: string;
+  right: string;
+  verdict: "disjoint" | "overlap" | "undeclared";
+  overlaps: string[];
+};
+
 export type LintResult = {
   schemaVersion: string;
   tool: "grace-lint";
@@ -41,6 +49,11 @@ export type LintResult = {
   commandsEnabled: boolean;
   /** Present when --run-commands executed at least one declared command. */
   commands?: CommandEvidence[];
+  /** Present when --parallel-preflight selected one change with --change. */
+  parallelTasks?: {
+    changeId: string;
+    pairs: ParallelTaskPairEvidence[];
+  };
   filesChecked: number;
   governedFiles: number;
   xmlFilesChecked: number;
