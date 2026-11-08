@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "bun:test";
 
+import { lintGraceProject } from "../grace-lint";
 import { archiveChange, locateRootStartTag, rewriteRootStatusAttribute } from "./archive";
 import { projectSlug } from "./run-log-store";
 import { writeChangeBundleFixture, writeMinimalGrace4Project } from "./test-fixtures";
@@ -147,28 +148,6 @@ describe("grace archive", () => {
     expect(readFileSync(path.join(activeBundle(root), "spec.xml"), "utf8")).toContain('status="approved"');
   });
 
-  it("refuses an empty record file and accepts a non-empty one", async () => {
-    const root = createProject();
-    const logRoot = createLogRoot();
-    writePassingFinalRun(logRoot, root);
-    const zeroBytes = path.join(root, "zero-record.md");
-    const whitespaceOnly = path.join(root, "blank-record.md");
-    const record = path.join(root, "record.md");
-    writeFileSync(zeroBytes, "");
-    writeFileSync(whitespaceOnly, "   \n\t\n");
-    writeFileSync(record, "Reviewed: no findings.\n");
-
-    await expect(archiveChange(root, { changeId: CHANGE_ID, logRoot, recordFile: zeroBytes })).rejects.toThrow(/Record file is empty/);
-    await expect(archiveChange(root, { changeId: CHANGE_ID, logRoot, recordFile: whitespaceOnly })).rejects.toThrow(/Record file is empty/);
-    await expect(archiveChange(root, { changeId: CHANGE_ID, logRoot, recordFile: path.join(root, "missing.md") })).rejects.toThrow(/Record file not found/);
-    expect(existsSync(activeBundle(root))).toBe(true);
-
-    const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot, recordFile: record });
-    expect(result.recordFile).toBe(record);
-    expect(existsSync(path.join(archivedBundle(root), "spec.xml"))).toBe(true);
-    expect(existsSync(path.join(archivedBundle(root), "record.md"))).toBe(false);
-  });
-
   it("refuses a bundle whose statuses are not approved", async () => {
     const root = createProject();
     const logRoot = createLogRoot();
@@ -209,7 +188,7 @@ describe("grace archive", () => {
     expect(readFileSync(path.join(activeBundle(root), "plan.xml"), "utf8")).toContain('status="approved"');
   });
 
-  it("verifies a recorded head once lint records VCS identity", async () => {
+  it("verifies a recorded head when the run recorded a clean tree", async () => {
     const root = createProject();
     initGitProject(root);
     const logRoot = createLogRoot();
@@ -221,12 +200,110 @@ describe("grace archive", () => {
       startedAt: "2026-01-03T10:00:00.000Z",
       finishedAt: "2026-01-03T10:01:00.000Z",
       head,
+      dirty: false,
     });
 
     const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot });
     expect(result.evidence.headVerified).toBe(true);
     expect(result.evidence.recordedHead).toBe(head);
     expect(result.warnings.join(" ")).not.toContain("records no VCS head");
+  });
+
+  it("refuses a run that records a head but not whether the tree was clean", async () => {
+    const root = createProject();
+    initGitProject(root);
+    const logRoot = createLogRoot();
+    writeRun(logRoot, root, "2026-01-03T10-00-00_C-ARCHIVE", {
+      changeId: CHANGE_ID,
+      assertionMode: "final",
+      status: "passed",
+      startedAt: "2026-01-03T10:00:00.000Z",
+      finishedAt: "2026-01-03T10:01:00.000Z",
+      head: runGit(root, ["rev-parse", "HEAD"]).stdout.trim(),
+    });
+
+    await expect(archiveChange(root, { changeId: CHANGE_ID, logRoot })).rejects.toThrow(/did not record whether the tree was clean/);
+    expect(readFileSync(path.join(activeBundle(root), "spec.xml"), "utf8")).toContain('status="approved"');
+  });
+
+  function writeCleanRunAtHead(logRoot: string, root: string) {
+    writeRun(logRoot, root, "2026-01-03T10-00-00_C-ARCHIVE", {
+      changeId: CHANGE_ID,
+      assertionMode: "final",
+      status: "passed",
+      startedAt: "2026-01-03T10:00:00.000Z",
+      finishedAt: "2026-01-03T10:01:00.000Z",
+      head: runGit(root, ["rev-parse", "HEAD"]).stdout.trim(),
+      dirty: false,
+    });
+  }
+
+  it("refuses an unstaged edit to a tracked file outside the bundle made after a clean final run", async () => {
+    const root = createProject();
+    initGitProject(root);
+    const logRoot = createLogRoot();
+    writeCleanRunAtHead(logRoot, root);
+    const tracked = runGit(root, ["ls-files", "--", ".grace/context"]).stdout.split("\n").filter(Boolean)[0]!;
+    writeFileSync(path.join(root, tracked), `${readFileSync(path.join(root, tracked), "utf8")}<!-- edited after the gate -->\n`);
+
+    await expect(archiveChange(root, { changeId: CHANGE_ID, logRoot })).rejects.toThrow(/changed outside the .* bundle since the final run/);
+    expect(existsSync(activeBundle(root))).toBe(true);
+  });
+
+  it("refuses an untracked file outside the bundle created after a clean final run", async () => {
+    const root = createProject();
+    initGitProject(root);
+    const logRoot = createLogRoot();
+    writeCleanRunAtHead(logRoot, root);
+    writeFileSync(path.join(root, "after-the-gate.txt"), "late\n");
+
+    await expect(archiveChange(root, { changeId: CHANGE_ID, logRoot })).rejects.toThrow(/changed outside the .* bundle since the final run/);
+    expect(existsSync(activeBundle(root))).toBe(true);
+  });
+});
+
+describe("grace archive on real final gate runs", () => {
+  const passingCommand = `${process.execPath} gate-ok.js`;
+
+  function createGatedProject() {
+    const root = mkdtempSync(path.join(os.tmpdir(), "grace-archive-gate-"));
+    writeMinimalGrace4Project(root);
+    writeFileSync(path.join(root, "gate-ok.js"), `console.log("gate-ok");\n`);
+    writeChangeBundleFixture(root, {
+      changeId: CHANGE_ID,
+      location: "active",
+      specStatus: "approved",
+      planStatus: "approved",
+      planTargetAssertions: `<MustPassCommand><Command>${passingCommand}</Command></MustPassCommand>`,
+    });
+    initGitProject(root);
+    return root;
+  }
+
+  async function runFinalGate(root: string, logRoot: string) {
+    await lintGraceProject(root, { assertionMode: "final", changeId: CHANGE_ID, runCommands: true, commandLogRoot: logRoot, commandProgress: () => {} });
+  }
+
+  it("archives on a final run lint recorded against the clean current HEAD", async () => {
+    const root = createGatedProject();
+    const logRoot = createLogRoot();
+    await runFinalGate(root, logRoot);
+
+    const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot });
+
+    expect(result.evidence.headVerified).toBe(true);
+    expect(result.evidence.recordedHead).toBe(runGit(root, ["rev-parse", "HEAD"]).stdout.trim());
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("refuses a final run lint recorded against uncommitted changes", async () => {
+    const root = createGatedProject();
+    const logRoot = createLogRoot();
+    writeFileSync(path.join(root, "uncommitted.txt"), "work in progress\n");
+    await runFinalGate(root, logRoot);
+
+    await expect(archiveChange(root, { changeId: CHANGE_ID, logRoot })).rejects.toThrow(/ran against uncommitted changes/);
+    expect(readFileSync(path.join(activeBundle(root), "plan.xml"), "utf8")).toContain('status="approved"');
   });
 
   it("refuses when a recorded head does not match the current HEAD", async () => {

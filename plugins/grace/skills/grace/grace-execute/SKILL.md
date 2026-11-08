@@ -35,9 +35,9 @@ Wait for explicit `sequential` or `parallel-safe` choice. Parallel-safe requires
 2. Execute one dependency-ready task or one verified parallel-safe batch at a time.
 3. Run each task's acceptance and verification immediately.
 4. Apply approved durable context, graph, and verification changes centrally.
-5. Reconcile durable state, run leaf plan gates, then run selected `--assertions final` as the outermost lifecycle gate, including `--run-commands` when `MustPassCommand` is declared. Final mode performs full project lint, evaluates the selected target, keeps unrelated approved baselines active, and does not re-evaluate the selected plan's superseded baseline.
+5. Reconcile durable state, commit observed and durable work, run leaf plan gates, then run selected `--assertions final` as the outermost lifecycle gate, including `--run-commands` when `MustPassCommand` is declared. Final mode performs full project lint, evaluates the selected target, keeps unrelated approved baselines active, and does not re-evaluate the selected plan's superseded baseline.
 6. Ask for explicit apply confirmation after fresh end-state evidence passes.
-7. Only then set spec and plan to `applied` and archive the complete bundle.
+7. Only then archive the complete bundle with `grace archive --path PROJECT --change C-ID`, which sets spec and plan to `applied`.
 8. Never edit approved assertions/scopes/tasks in place, bypass stale evidence, or continue through unknown drift.
 </execution_rules>
 </skill>

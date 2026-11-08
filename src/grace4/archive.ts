@@ -26,8 +26,6 @@ const BUNDLE_ARTIFACTS = [
 export type ArchiveOptions = {
   /** C-* anchor of the active bundle to archive. */
   changeId: string;
-  /** Optional review-record path. Validated as non-empty; never read for shape, never copied. */
-  recordFile?: string;
   /** Overrides resolveLogRoot() for tests. */
   logRoot?: string;
 };
@@ -42,7 +40,7 @@ export type ArchiveEvidence = {
   finishedAt: string;
   /** True only when the run recorded a VCS head that matched the current HEAD. */
   headVerified: boolean;
-  /** Head recorded in meta.json, or null while lint does not record VCS identity. */
+  /** Head recorded in meta.json; null for a run outside git or written before schema 1.1.0. */
   recordedHead: string | null;
 };
 
@@ -64,7 +62,6 @@ export type ArchiveResult = {
   to: string;
   evidence: ArchiveEvidence;
   statusFlips: ArchiveStatusFlip[];
-  recordFile: string | null;
   moveMode: "git" | "filesystem";
   /** True when the rename and the flipped content were staged. The archive never commits. */
   staged: boolean;
@@ -86,10 +83,12 @@ type RunMetaEvidence = {
   startedAt: unknown;
   finishedAt: unknown;
   /**
-   * VCS head recorded by lint. GRACE does not record it yet, so this is always absent today and
-   * the gate degrades to run-identity matching with an explicit warning.
+   * VCS head recorded by lint. Absent in meta.json written before schema 1.1.0 and null outside a
+   * git repository; either way the gate degrades to run-identity matching with an explicit warning.
    */
   head?: unknown;
+  /** Whether the tree carried uncommitted changes when the run started; recorded with `head`. */
+  dirty?: unknown;
 };
 
 /** Refusal carrying the stable `precondition-failed` code. */
@@ -237,9 +236,10 @@ function resolveGitHead(root: string): string | null {
 }
 
 /**
- * Requires a passing final run for the change. Once lint records VCS identity in meta.json the
- * recorded head is compared against the current HEAD; until then the gate matches on run identity
- * only and warns that the tree the evidence describes cannot be confirmed.
+ * Requires a passing final run for the change. When meta.json records a head, the run must have
+ * started on a clean tree at the current HEAD, because a matching head proves nothing about
+ * uncommitted changes. A run with no recorded head matches on run identity only and warns that
+ * the tree the evidence describes cannot be confirmed.
  */
 function requireFinalRunEvidence(root: string, options: ArchiveOptions, warnings: string[]): ArchiveEvidence {
   const logRoot = options.logRoot ?? resolveLogRoot();
@@ -266,6 +266,12 @@ function requireFinalRunEvidence(root: string, options: ArchiveOptions, warnings
     if (currentHead !== recordedHead) {
       throw refuse(`Final run ${selected.runId} recorded head ${recordedHead}, which is not the current HEAD ${currentHead}. Rerun the final gate.`);
     }
+    if (selected.meta.dirty === true) {
+      throw refuse(`Final run ${selected.runId} ran against uncommitted changes, so it cannot prove the committed tree. Commit the work, then rerun the final gate.`);
+    }
+    if (selected.meta.dirty !== false) {
+      throw refuse(`Final run ${selected.runId} recorded head ${recordedHead} but did not record whether the tree was clean. Rerun the final gate.`);
+    }
     headVerified = true;
   } else {
     warnings.push(
@@ -283,18 +289,6 @@ function requireFinalRunEvidence(root: string, options: ArchiveOptions, warnings
     headVerified,
     recordedHead,
   };
-}
-
-/** Validates an optional review record without reading its shape. Whitespace-only counts as empty. */
-function requireNonEmptyRecordFile(recordFile: string): string {
-  const resolved = path.resolve(recordFile);
-  if (!existsSync(resolved) || !statSync(resolved).isFile()) {
-    throw refuse(`Record file not found: ${resolved}.`);
-  }
-  if (!readFileSync(resolved, "utf8").trim()) {
-    throw refuse(`Record file is empty: ${resolved}. An archive record must carry the review evidence the project's policy requires.`);
-  }
-  return resolved;
 }
 
 /** Git facts the archive needs. All fields are false when the project is not a git worktree. */
@@ -316,11 +310,17 @@ function runGit(root: string, args: string[]) {
   }
 }
 
+function splitNulPaths(output: string): string[] {
+  return output.split("\0").map((entry) => entry.replaceAll("\\", "/")).filter(Boolean);
+}
+
 /**
  * Refuses when the index holds anything outside the change bundle, so the archive commit the
- * caller makes next can only ever contain the bundle. Paths are compared project-relative.
+ * caller makes next can only ever contain the bundle. When the evidence was verified against a
+ * clean tree at HEAD, also refuses any tracked or untracked change outside the bundle, because the
+ * tree no longer matches the one the final run proved. Paths are compared project-relative.
  */
-function inspectGitContext(root: string, bundleRelative: string, archiveRelative: string, warnings: string[]): GitContext {
+function inspectGitContext(root: string, bundleRelative: string, archiveRelative: string, requireCleanTree: boolean, warnings: string[]): GitContext {
   if (runGit(root, ["rev-parse", "--is-inside-work-tree"]).exitCode !== 0) {
     warnings.push("Project is not a git worktree, so the staged-file check was skipped and the bundle was moved on the filesystem.");
     return { available: false, tracked: false };
@@ -330,13 +330,28 @@ function inspectGitContext(root: string, bundleRelative: string, archiveRelative
   if (staged.exitCode !== 0) {
     throw refuse(`Unable to inspect the git index: ${staged.stderr.trim() || "git diff --cached failed"}.`);
   }
-  const stagedPaths = staged.stdout.split("\0").map((entry) => entry.replaceAll("\\", "/")).filter(Boolean);
-  const foreign = stagedPaths.filter((entry) => !entry.startsWith(`${bundleRelative}/`) && !entry.startsWith(`${archiveRelative}/`));
+  const outsideBundle = (entry: string) => !entry.startsWith(`${bundleRelative}/`) && !entry.startsWith(`${archiveRelative}/`);
+  const foreign = splitNulPaths(staged.stdout).filter(outsideBundle);
   if (foreign.length > 0) {
     throw refuse(
       `The index holds ${foreign.length} staged file(s) outside the ${bundleRelative} bundle: ${foreign.slice(0, 5).join(", ")}. `
       + "Commit or unstage them so the archive commit carries the bundle alone.",
     );
+  }
+
+  if (requireCleanTree) {
+    const modified = runGit(root, ["diff", "HEAD", "--name-only", "--relative", "-z", "--", "."]);
+    const untracked = runGit(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", "."]);
+    if (modified.exitCode !== 0 || untracked.exitCode !== 0) {
+      throw refuse(`Unable to inspect the worktree: ${(modified.exitCode !== 0 ? modified.stderr : untracked.stderr).trim() || "git failed"}.`);
+    }
+    const changed = [...splitNulPaths(modified.stdout), ...splitNulPaths(untracked.stdout)].filter(outsideBundle);
+    if (changed.length > 0) {
+      throw refuse(
+        `${changed.length} file(s) changed outside the ${bundleRelative} bundle since the final run: ${changed.slice(0, 5).join(", ")}. `
+        + "Commit them and rerun the final gate, or revert them.",
+      );
+    }
   }
 
   const tracked = runGit(root, ["ls-files", "-z", "--", bundleRelative]);
@@ -398,9 +413,8 @@ export async function archiveChange(projectRoot: string, options: ArchiveOptions
     };
   });
 
-  const recordFile = options.recordFile ? requireNonEmptyRecordFile(options.recordFile) : null;
   const evidence = requireFinalRunEvidence(root, options, warnings);
-  const git = inspectGitContext(root, bundleRelative, destinationRelative, warnings);
+  const git = inspectGitContext(root, bundleRelative, destinationRelative, evidence.headVerified, warnings);
   const useGit = git.available && git.tracked;
 
   for (const artifact of pending) {
@@ -455,7 +469,6 @@ export async function archiveChange(projectRoot: string, options: ArchiveOptions
     to: destinationRelative,
     evidence,
     statusFlips: pending.map((artifact) => ({ file: `${destinationRelative}/${path.basename(artifact.file)}`, from: APPROVED_STATUS, to: APPLIED_STATUS })),
-    recordFile,
     moveMode: useGit ? "git" : "filesystem",
     staged: useGit,
     warnings,
@@ -480,7 +493,6 @@ export function formatArchiveText(result: ArchiveResult): string {
     "Status Flips",
     ...result.statusFlips.map((flip) => `- ${flip.file}: ${flip.from} -> ${flip.to}`),
   ];
-  lines.push("", "Record", `- ${result.recordFile ?? "none supplied"}`);
   if (result.warnings.length > 0) {
     lines.push("", "Warnings", ...result.warnings.map((warning) => `- ${warning}`));
   }
@@ -502,7 +514,6 @@ export const archiveCommand = defineCommand({
   args: {
     path: { type: "string", alias: "p", description: "Project root to archive in", default: "." },
     change: { type: "string", description: "Active C-* bundle to archive" },
-    recordFile: { type: "string", description: "Path to the project's archive record; validated as non-empty, never rewritten" },
     format: { type: "string", alias: "f", description: "Output format: text or json", default: "text" },
     json: { type: "boolean", description: "Shortcut for --format json", default: false },
   },
@@ -512,8 +523,7 @@ export const archiveCommand = defineCommand({
       const format = resolveFormat(context.args.format, context.args.json);
       const changeId = String(context.args.change ?? "").trim();
       if (!changeId) throw new GraceCommandError("invalid-arguments", "Missing required option `--change C-ID`.");
-      const recordFile = String(context.args.recordFile ?? "").trim();
-      const result = await archiveChange(String(context.args.path ?? "."), { changeId, recordFile: recordFile || undefined });
+      const result = await archiveChange(String(context.args.path ?? "."), { changeId });
 
       if (format === "json") process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       else process.stdout.write(`${formatArchiveText(result)}\n`);
