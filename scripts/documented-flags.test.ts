@@ -16,11 +16,13 @@ import { lintCommand } from "../src/grace-lint.ts";
 import { moduleCommand } from "../src/grace-module.ts";
 import { statusCommand } from "../src/grace-status.ts";
 import { verificationCommand } from "../src/grace-verification.ts";
+import { archiveCommand } from "../src/grace4/archive.ts";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
 /** Subcommands registered on the `grace` binary in src/grace.ts. */
 const rootSubCommands: Record<string, CommandDef> = {
+  archive: archiveCommand as CommandDef,
   file: fileCommand as CommandDef,
   lint: lintCommand as CommandDef,
   module: moduleCommand as CommandDef,
