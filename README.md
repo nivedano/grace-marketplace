@@ -81,14 +81,15 @@ For a new GRACE 4 project:
 
 1. Run `$grace-init` to create `.grace`.
 2. Fill `.grace/context` artifacts with your agent.
-3. Run `$grace-spec` for a change.
-4. Run `$grace-plan` after spec approval.
-5. Before observed writes begin, run the active-baseline preflight: `grace lint --path /path/to/project --assertions current`.
-6. Run `grace lint --path /path/to/project --change C-ID --assertions baseline` before execution; add `--run-commands` when the baseline declares `MustPassCommand`.
-7. Run `grace status --path /path/to/project --json`.
-8. Run `$grace-execute` and choose sequential or parallel-safe mode. Parallel-safe mode additionally requires `grace lint --path /path/to/project --parallel-preflight`.
-9. Before apply/archive, commit all work, then run `grace lint --path /path/to/project --change C-ID --assertions final`; add `--run-commands` when the target declares `MustPassCommand`.
-10. Archive the applied bundle with `grace archive --path /path/to/project --change C-ID`. It requires a passing final run started on a clean tree at the current HEAD, refuses changes outside the bundle, flips both statuses to `applied`, stages the move, and never commits.
+3. Run `$grace-spec` for a change; it records the user's decisions in `design-context.xml` and writes `spec.xml` as `draft`.
+4. Run `$grace-plan` in the same session. It writes `plan.xml` as `draft`; no approval sits between the two drafts.
+5. Run `$grace-brief`: it runs `grace lint --path /path/to/project --change C-ID --assertions baseline --draft`, commits the draft pair, has an independent subagent audit it, and shows the owner a one-screen brief; one owner approval sets `spec.xml` and `plan.xml` to `approved` in one commit that touches only `.grace/`.
+6. Before observed writes begin, run the active-baseline preflight: `grace lint --path /path/to/project --assertions current`.
+7. Run `grace lint --path /path/to/project --change C-ID --assertions baseline` before execution; add `--run-commands` when the baseline declares `MustPassCommand`.
+8. Run `grace status --path /path/to/project --json`; `ready-to-execute` awaits the owner's explicit execution order, and the approval is not the execution order.
+9. On that order, run `$grace-execute` and choose sequential or parallel-safe mode. Parallel-safe mode additionally requires `grace lint --path /path/to/project --parallel-preflight`.
+10. Before apply/archive, commit all work, then run `grace lint --path /path/to/project --change C-ID --assertions final`; add `--run-commands` when the target declares `MustPassCommand`.
+11. Archive the applied bundle with `grace archive --path /path/to/project --change C-ID`. It requires a passing final run started on a clean tree at the current HEAD, refuses changes outside the bundle, flips both statuses to `applied`, stages the move, and never commits.
 
 Existing GRACE 3 projects should run `$grace-migrate` and review the migration report before writing `.grace` artifacts.
 
@@ -99,8 +100,8 @@ Migration cleanup is separately gated: successful current lint, fresh status pro
 | Skill | Purpose |
 | --- | --- |
 | `grace-init` | Bootstrap the `.grace` skeleton, templates, and agent guidance |
-| `grace-spec` | Create an approved GRACE 4 change spec and optional design context |
-| `grace-plan` | Design assertions, scopes, tasks, and verification gates from an approved spec |
+| `grace-spec` | Interview the user, record the user's decisions in design context, and draft a GRACE 4 change spec |
+| `grace-plan` | Draft assertions, scopes, tasks, and verification gates beside the draft spec, with no approval between them |
 | `grace-brief` | Audit a draft spec-and-plan pair independently, brief the owner, and record the approval |
 | `grace-execute` | Execute the approved plan in sequential or parallel-safe mode |
 | `grace-refactor` | Rename, move, split, merge, and extract modules without artifact drift |

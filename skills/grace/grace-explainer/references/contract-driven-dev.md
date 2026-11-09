@@ -19,7 +19,7 @@ Every file starts with:
 // END_MODULE_CONTRACT
 ```
 
-The contract is written before the code. It comes from the GraceChangeSpec (`.grace/changes/active/*/spec.xml`), which was approved by the user during the `$grace-spec` phase.
+The contract is written before the code. It comes from the GraceChangeSpec (`.grace/changes/active/*/spec.xml`). `$grace-spec` and `$grace-plan` write it and the GraceChangePlan as a draft pair, the `$grace-brief` audit checks the pair, and one owner approval sets both to `approved`. Start `$grace-execute` only on a separate explicit owner order: the approval is not the execution order, even when both arrive in one message, unless the message says to execute.
 
 Name things semantically. A contract is much stronger when its module names, PURPOSE text, and block labels already encode the intended transformation instead of forcing the agent to infer it from abstract placeholders.
 

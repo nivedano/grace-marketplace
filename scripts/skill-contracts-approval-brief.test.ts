@@ -560,3 +560,143 @@ describe("approval and the re-approval window: mirrors", () => {
     }
   });
 });
+
+/** grace-brief's execution-order rule, restated verbatim wherever the lifecycle names the execution order. */
+const EXECUTION_ORDER_RULE =
+  "Start `$grace-execute` only on a separate explicit owner order: the approval is not the execution order, even when both arrive in one message, unless the message says to execute.";
+const APPROVAL_STATES = ["`awaiting-approval`", "`approval-pending-commit`", "`return-pending-commit`", "`half-approval`"];
+const LIFECYCLE_FILES = [
+  "skills/grace/grace-cli/SKILL.md",
+  "skills/grace/grace-status/SKILL.md",
+  "skills/grace/grace-explainer/SKILL.md",
+  "skills/grace/grace-explainer/references/contract-driven-dev.md",
+];
+
+describe("approval lifecycle: grace-cli", () => {
+  const skill = read("skills/grace/grace-cli/SKILL.md");
+
+  it("lists the --draft invocation and limits the flag to baseline", () => {
+    expect(block(skill, "commands")).toContain(
+      "`grace lint --path PROJECT --change C-ID --assertions baseline --draft` (add `--run-commands` when the baseline declares `MustPassCommand`)",
+    );
+    expectAll(block(skill, "draft_baseline_contract"), [
+      "`--draft` applies only with `--assertions baseline`; with `current`, `target` or `final` it is an `invalid-arguments` error.",
+      "a bundle whose identity-matched `plan.xml` is `draft` beside a `draft` or `approved` `spec.xml`",
+      "Without `--draft`, a draft `plan.xml` is `assertion.change-not-approved`, as is a missing bundle or `plan.xml` with or without it.",
+      "Never use a draft-baseline run as the execution baseline",
+    ]);
+  });
+
+  it("names selectedPlanStatus in JSON, the text report and meta.json", () => {
+    expectAll(block(skill, "draft_baseline_contract"), [
+      "`selectedPlanStatus` (`approved` or `draft`)",
+      "`Selected plan: draft`",
+      "`meta.json` records `selectedPlanStatus`",
+    ]);
+  });
+
+  it("lists scope.reapproval-after-write among the committed-scope errors", () => {
+    const contract = block(skill, "committed_scope_contract");
+    const errors = contract.slice(contract.indexOf("Errors:"), contract.indexOf("Warnings:"));
+    expect(errors).toContain(
+      "- `scope.reapproval-after-write`: a re-approval followed the first commit carrying the change's `Change` trailer that wrote a file outside `.grace/` and outside `committedScopeExempt`.",
+    );
+  });
+
+  it("qualifies approved-contract-drift for spec.xml to a spec approved in HEAD", () => {
+    expect(block(skill, "committed_scope_contract")).toContain(
+      "or any edit to `spec.xml` stays `approved-contract-drift` for a `spec.xml` approved in `HEAD`, a hard stop; only a status-only return to `draft` is `return-pending-commit`.",
+    );
+  });
+
+  it("names the four approval states and the wait of ready-to-execute", () => {
+    const status = block(skill, "status_contract");
+    expectAll(status, [...APPROVAL_STATES, "`--fail-on errors`", "`ready-to-execute`", "the owner's explicit execution order"]);
+    expect(status).toContain(
+      "A `spec.xml` or `plan.xml` that is `draft` in the working tree and `draft` or untracked in `HEAD` is explained by its bundle",
+    );
+  });
+});
+
+describe("approval lifecycle: grace-status", () => {
+  const skill = read("skills/grace/grace-status/SKILL.md");
+
+  it("reports the four approval states", () => {
+    expectAll(block(skill, "must_report"), [...APPROVAL_STATES, "`--fail-on errors`"]);
+  });
+
+  it("reports ready-to-execute as awaiting the owner's execution order", () => {
+    expect(block(skill, "must_report")).toContain("`ready-to-execute` as awaiting the owner's explicit execution order");
+    expect(block(skill, "hard_rules")).toContain(EXECUTION_ORDER_RULE);
+  });
+
+  it("treats a draft pair awaiting the audit as normal", () => {
+    expect(block(skill, "hard_rules")).toContain(
+      "A draft spec without a plan is normal, and so is a draft pair (`spec.xml` and `plan.xml` both `draft`) awaiting the `$grace-brief` audit;",
+    );
+  });
+});
+
+describe("approval lifecycle: grace-explainer", () => {
+  it("names the draft pair, the audit, one approval and the execution order in the workflow", () => {
+    const workflow = block(read("skills/grace/grace-explainer/SKILL.md"), "workflow");
+    expect(workflow).not.toContain("waits for approval");
+    expectAll(workflow, [
+      "writes `spec.xml` as `draft`",
+      "writes `plan.xml` as `draft` in the same session; no approval sits between the two drafts",
+      "`grace-brief` runs the draft baseline lint and an independent audit of the draft pair",
+      "one owner approval sets `spec.xml` and `plan.xml` to `approved`",
+      EXECUTION_ORDER_RULE,
+    ]);
+  });
+
+  it("derives the contract from the approved draft pair, not from a grace-spec approval", () => {
+    const explainer = read("skills/grace/grace-explainer/references/contract-driven-dev.md");
+    expect(explainer).not.toContain("approved by the user during the `$grace-spec` phase");
+    expectAll(explainer, [
+      "`$grace-spec` and `$grace-plan` write it and the GraceChangePlan as a draft pair, the `$grace-brief` audit checks the pair, and one owner approval sets both to `approved`.",
+      EXECUTION_ORDER_RULE,
+    ]);
+  });
+});
+
+describe("approval lifecycle: README", () => {
+  const readme = read("README.md");
+
+  it("walks the quick start through the draft pair, the audit, one approval and the execution order", () => {
+    const quickStart = section(readme, "GRACE 4 Quick Start");
+    expect(quickStart).not.toContain("after spec approval");
+    expectAll(quickStart, [
+      "writes `spec.xml` as `draft`",
+      "writes `plan.xml` as `draft`; no approval sits between the two drafts",
+      "`$grace-brief`",
+      "--assertions baseline --draft",
+      "one owner approval sets `spec.xml` and `plan.xml` to `approved`",
+      "the approval is not the execution order",
+    ]);
+  });
+
+  it("describes grace-spec and grace-plan as drafting", () => {
+    const row = (skill: string) => readme.split("\n").find((line) => line.startsWith(`| \`${skill}\` |`))!;
+    expect(row("grace-spec")).toBe(
+      "| `grace-spec` | Interview the user, record the user's decisions in design context, and draft a GRACE 4 change spec |",
+    );
+    expect(row("grace-plan")).toBe(
+      "| `grace-plan` | Draft assertions, scopes, tasks, and verification gates beside the draft spec, with no approval between them |",
+    );
+  });
+
+  it("keeps one CLI-table row for --draft", () => {
+    const rows = readme.split("\n").filter((line) => line.startsWith("| `grace lint") && line.includes("--draft"));
+    expect(rows).toHaveLength(1);
+  });
+});
+
+describe("approval lifecycle: mirrors", () => {
+  it("mirrors the edited files byte-for-byte", () => {
+    for (const file of LIFECYCLE_FILES) {
+      const packaged = path.join(repoRoot, "plugins/grace", file);
+      expect(readFileSync(packaged).equals(readFileSync(path.join(repoRoot, file)))).toBe(true);
+    }
+  });
+});

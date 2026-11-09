@@ -162,10 +162,11 @@ describe("committed-scope skill contracts", () => {
       "scope.approved-plan-amended",
       "scope.reapproval-changed-gates",
       "scope.committed-check-failed",
+      "scope.reapproval-after-write",
     ]) {
       expect(block).toContain(code);
     }
-    expect(block.match(/scope\.[a-z-]+/g)?.filter((code, index, all) => all.indexOf(code) === index)).toHaveLength(14);
+    expect(block.match(/scope\.[a-z-]+/g)?.filter((code, index, all) => all.indexOf(code) === index)).toHaveLength(15);
   });
 
   it("documents re-approval gate changes, git failures and the history rule", () => {
