@@ -25,7 +25,7 @@ Each `V-M-*` entry may contain:
 - `<Cwd>` - one contained project-relative command working directory
 - `<TestFiles><File>...</File></TestFiles>` - exact project-root-relative test paths
 - `<Command>` - module-local verification command
-- `<Scenario>` - named success or failure behavior
+- `<Scenario>` - named success or failure behavior; may begin with one empty id element `<SC-<entry>-NNN />` (`<entry>` is the `V-M-*` id without `V-M-`) and may contain `<ManualEvidence>` text naming who or what confirms it outside any `<Command>`
 - `<Marker>` - required log markers for trace assertions
 
 ## Module Verification Entry
@@ -39,8 +39,8 @@ Example:
     <File>apps/server/src/chat/index.test.ts</File>
   </TestFiles>
   <Command>bun test src/chat/index.test.ts</Command>
-  <Scenario>Generated title is assigned only when the chat is still untitled.</Scenario>
-  <Scenario>Ownership failure rejects the mutation.</Scenario>
+  <Scenario><SC-CHATS-001 />Generated title is assigned only when the chat is still untitled.</Scenario>
+  <Scenario><SC-CHATS-002 />Ownership failure rejects the mutation.<ManualEvidence>Owner check against a staging database.</ManualEvidence></Scenario>
   <Marker>[ChatDomain][setGeneratedTitleIfEmpty][BLOCK_ASSIGN_GENERATED_TITLE]</Marker>
 </V-M-CHATS>
 ```

@@ -29,5 +29,9 @@ Lint, status, and navigation commands validate before returning records. JSON ar
 TypeScript/JavaScript analysis is bundled. Python and Dart governed files require their runtimes on PATH; missing runtimes fail closed with actionable `analysis.runtime-missing` diagnostics instead of silently dropping parity checks.
 </runtime_contract>
 
+<scenario_evidence_contract>
+`grace status` prints a `Scenario Evidence` section, carried in JSON as `scenarioEvidence` with a per-entry breakdown. Totals: `scenarios` (all), `executable` (has an `SC-*` id referenced from a scanned code file or a file in the entry's `<TestFiles>`), `manualOnly` (has an id, no reference, and `<ManualEvidence>`), `unproven` (has an id, neither a reference nor `<ManualEvidence>`), `legacy` (no id). The text lists up to 20 `unproven` scenarios; resolve each by writing its id into the proving test or by adding `<ManualEvidence>`. `grace lint` raises errors `verification.scenario-duplicate-id` (one id on two scenarios), `verification.scenario-invalid-id` (malformed id, a second id element, or an entry part that differs from the enclosing `V-M-*`) and `verification.scenario-dangling-reference` (a scanned file holds an `SC-*` token naming an existing `V-M-*` entry that has no such scenario). A missing id or missing evidence is reported by `grace status` only, never by `grace lint`.
+</scenario_evidence_contract>
+
 <migration_boundary>GRACE 4 commands do not dual-validate legacy GRACE 3 docs. Use `grace-migrate`.</migration_boundary>
 </skill>

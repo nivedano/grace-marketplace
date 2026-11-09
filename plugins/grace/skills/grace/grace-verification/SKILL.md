@@ -21,6 +21,12 @@ When verification commands run from a workspace or package directory, add one di
 <evidence_contract>
 Use `<Marker>` when module health must prove a runtime log or trace emission from linked implementation code. Use `<TraceAssertion>` for deterministic test or trace evidence that does not require runtime logging, such as pure functions, type-level modules, and core libraries. A non-empty marker or trace assertion satisfies the module-health evidence requirement; only authored markers require matching runtime emission and `BLOCK_*` evidence.
 </evidence_contract>
+<scenario_ids>
+Give every `<Scenario>` that a change adds or edits one empty id element `<SC-<entry>-NNN />` as its first child. `<entry>` is the enclosing `V-M-*` id without the `V-M-` prefix; `NNN` is the next free three-digit number in that entry (`V-M-FW-MAIN` yields `SC-FW-MAIN-001`, then `SC-FW-MAIN-002`). Then do one of:
+- Write the id into the test that proves the scenario, inside a comment, a string, or a test display name, and list that test in the entry's `<TestFiles>`. Separate the id from adjacent text by whitespace or by punctuation other than `-`, `_` and `.`; `<!--SC-FW-MAIN-002-->` and `SC-FW-MAIN-002-boot` do not count as evidence.
+- Add `<ManualEvidence>text</ManualEvidence>` inside the `<Scenario>`, naming who or what confirms it outside any `<Command>` (the device boot log, the bench, an owner check).
+Leave untouched scenarios without an id.
+</scenario_ids>
 <gate_task_contract>
 Reference named project tasks in `MustPassCommand` and `ExpectedCommand` (for example `bun run gate:e2e`) instead of inline `;`-chains. Decompose full gates into granular named tasks (`gate:test`, `gate:typecheck`, `gate:build`, `gate:e2e`) so a selective re-run is just running that task, timeouts map to one coherent unit, and `grace lint --run-commands` reports each gate step with its own timing and log.
 </gate_task_contract>
