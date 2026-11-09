@@ -77,6 +77,7 @@ const ANCHOR_FAMILIES: readonly {
   { family: "change", prefix: "C-", pattern: ANCHOR_PATTERNS.change },
   { family: "module", prefix: "M-", pattern: ANCHOR_PATTERNS.module },
   { family: "task", prefix: "T-", pattern: ANCHOR_PATTERNS.task },
+  { family: "scenario", prefix: "SC-", pattern: ANCHOR_PATTERNS.scenario },
 ];
 
 const CONTEXT_ARTIFACTS = [
