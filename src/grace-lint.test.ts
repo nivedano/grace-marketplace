@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "bun:test";
 
+import { commit, createRepo, plan as gitPlan, spec as gitSpec } from "./grace4/git-fixture";
 import { projectSlug } from "./grace4/run-log-store";
+import { writeMinimalGrace4Project as writeGit4Project } from "./grace4/test-fixtures";
 import { formatTextReport, lintGraceProject, parseCommandTimeoutMs, parseKeepRuns, resolveCommandVerbosity } from "./grace-lint";
 import { getLintIssueGuide } from "./lint/catalog";
 import { loadGraceLintConfig, resolveRunLogRetention } from "./lint/config";
@@ -867,5 +869,156 @@ describe("run-commands CLI flag resolution", () => {
     expect(resolveCommandVerbosity({ ...base, format: "text", interactive: true })).toBe("live");
     expect(resolveCommandVerbosity({ ...base, format: "text" })).toBe("compact");
     expect(() => resolveCommandVerbosity({ format: "text", verbose: true, quiet: true, interactive: false })).toThrow();
+  });
+});
+
+describe("committed-scope check in final mode", () => {
+  const CHANGE = "C-TEST";
+
+  /** A git repository around a complete GRACE 4 project whose approved plan admits only src/a.ts, then an owned commit writes src/other.ts. */
+  function committedScopeRepo(): string {
+    const root = createRepo();
+    writeGit4Project(root);
+    commit(root, { "README.md": "fixture\n" }, "chore: seed");
+    commit(
+      root,
+      {
+        [`.grace/changes/active/${CHANGE}/spec.xml`]: gitSpec(CHANGE, "approved"),
+        [`.grace/changes/active/${CHANGE}/plan.xml`]: gitPlan(CHANGE, "approved", ["src/a.ts"]),
+      },
+      `docs: approve\n\nChange: ${CHANGE}`,
+    );
+    commit(root, { "src/other.ts": "other\n" }, `feat: write outside scope\n\nChange: ${CHANGE}`);
+    return root;
+  }
+
+  it("final mode adds committedScope and its issues for the selected change", async () => {
+    const root = committedScopeRepo();
+
+    const result = await lintGraceProject(root, { assertionMode: "final", changeId: CHANGE });
+
+    expect(result.committedScope?.changeId).toBe(CHANGE);
+    expect(result.committedScope?.errors.map((entry) => entry.file)).toEqual(["src/other.ts"]);
+    const outside = result.issues.filter((issue) => issue.code === "scope.committed-outside");
+    expect(outside).toHaveLength(1);
+    expect(outside[0]!.severity).toBe("error");
+    expect(outside[0]!.title).toBeTruthy();
+  });
+
+  it("final mode does not duplicate assertion.change-required or change-not-approved", async () => {
+    const root = committedScopeRepo();
+
+    const missing = await lintGraceProject(root, { assertionMode: "final" });
+    expect(missing.issues.filter((issue) => issue.code === "assertion.change-required")).toHaveLength(1);
+    expect(missing.committedScope).toBeUndefined();
+
+    const unapproved = await lintGraceProject(root, { assertionMode: "final", changeId: "C-ABSENT" });
+    expect(unapproved.issues.filter((issue) => issue.code === "assertion.change-not-approved")).toHaveLength(1);
+    expect(unapproved.committedScope).toBeUndefined();
+    expect(unapproved.issues.some((issue) => issue.code === "scope.approval-uncommitted" || issue.code === "scope.committed-outside")).toBe(false);
+  });
+
+  it("current, baseline and target modes add no committedScope", async () => {
+    const root = committedScopeRepo();
+
+    for (const assertionMode of ["current", "baseline", "target"] as const) {
+      const result = await lintGraceProject(root, { assertionMode, changeId: CHANGE });
+      expect(result.committedScope).toBeUndefined();
+      expect(result.issues.some((issue) => issue.code === "scope.committed-outside")).toBe(false);
+    }
+  });
+
+  it("reads requireChangeTrailers from .grace-lint.json", async () => {
+    const root = createRepo();
+    writeGit4Project(root);
+    commit(root, { "README.md": "fixture\n", ".grace-lint.json": `{"requireChangeTrailers": true}\n` }, "chore: seed");
+    commit(
+      root,
+      {
+        [`.grace/changes/active/${CHANGE}/spec.xml`]: gitSpec(CHANGE, "approved"),
+        [`.grace/changes/active/${CHANGE}/plan.xml`]: gitPlan(CHANGE, "approved", ["src/a.ts"]),
+      },
+      "docs: approve without a trailer",
+    );
+
+    const result = await lintGraceProject(root, { assertionMode: "final", changeId: CHANGE });
+
+    expect(result.issues.find((issue) => issue.code === "scope.no-owned-commits")?.severity).toBe("error");
+  });
+
+  it("text report prints the Committed scope section with capped lists", async () => {
+    const root = committedScopeRepo();
+    const result = await lintGraceProject(root, { assertionMode: "final", changeId: CHANGE });
+    const far = Array.from({ length: 25 }, (_, index) => `src/far-${index}.ts`);
+    result.committedScope = {
+      changeId: CHANGE,
+      firstCommit: "1111111aaaa",
+      approvalCommit: "2222222bbbb",
+      approvalPoints: ["2222222"],
+      reapprovalAdded: [{ commit: "3333333", added: ["src/re.ts"] }],
+      mutations: [{ commit: "4444444", sections: ["TargetAssertions"] }],
+      wideningCommits: [{ commit: "5555555", added: ["src/near.ts", ...far] }],
+      ownedCommits: 3,
+      untaggedInScope: ["6666666"],
+      untaggedOther: { count: 2, commits: ["7777777", "8888888"] },
+      approved: ["src/a.ts"],
+      widenedNear: ["src/near.ts"],
+      widenedFar: far,
+      errors: [{ file: "src/other.ts", code: "scope.committed-outside", commit: "9999999" }],
+    };
+
+    const text = formatTextReport(result);
+
+    expect(text).toContain(`Committed scope (${CHANGE})`);
+    expect(text).toContain("B: 1111111aaaa");
+    expect(text).toContain("A: 2222222bbbb");
+    expect(text).toContain("3333333: src/re.ts");
+    expect(text).toContain("4444444: TargetAssertions");
+    expect(text).toContain("5555555: src/near.ts");
+    expect(text).toContain("src/other.ts (scope.committed-outside) in 9999999");
+    expect(text).toContain("src/far-19.ts");
+    expect(text).not.toContain("src/far-20.ts");
+    expect(text).toContain("… 5 more");
+    expect(text).toContain("Near (1)");
+    expect(text).toContain("Owned commits: 3");
+    expect(text).toContain("In scope without trailer (1): 6666666");
+    expect(text).toContain("Elsewhere without trailer: 2 (7777777, 8888888)");
+    expect(formatTextReport(await lintGraceProject(root))).not.toContain("Committed scope");
+  });
+
+  it("text report says why the committed-scope check was skipped", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeApprovedChange(root, CHANGE, "<MustExist><Value>M-EXAMPLE</Value></MustExist>", "<MustVerify><Module>M-EXAMPLE</Module></MustVerify>");
+
+    const result = await lintGraceProject(root, { assertionMode: "final", changeId: CHANGE });
+
+    expect(result.committedScope?.skipped).toBe("not-git");
+    expect(result.issues.some((issue) => issue.code === "scope.committed-check-skipped")).toBe(true);
+    expect(formatTextReport(result)).toContain("Skipped: not-git");
+  });
+
+  it("every new scope.* code has a catalog guide", () => {
+    const codes = [
+      "scope.committed-outside",
+      "scope.widening-with-code",
+      "scope.written-before-widening",
+      "scope.written-before-approval",
+      "scope.approved-plan-mutated",
+      "scope.approval-uncommitted",
+      "scope.no-owned-commits",
+      "scope.reapproval-widened",
+      "scope.widened-far",
+      "scope.untagged-commit",
+      "scope.committed-check-skipped",
+    ];
+    const prefixTitle = getLintIssueGuide("scope.unknown-code").title;
+    for (const code of codes) {
+      const guide = getLintIssueGuide(code);
+      const generic = code.split(/[.-]/g).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+      expect(guide.title).not.toBe(generic);
+      expect(guide.title).not.toBe(prefixTitle);
+      expect(guide.remediation.length).toBeGreaterThan(0);
+    }
   });
 });

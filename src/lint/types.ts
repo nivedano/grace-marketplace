@@ -1,3 +1,5 @@
+import type { CommittedScopeReport } from "../grace4/committed-scope";
+
 export type LintSeverity = "error" | "warning";
 
 export type LintProfile = "standard";
@@ -41,6 +43,8 @@ export type LintResult = {
   commandsEnabled: boolean;
   /** Present when --run-commands executed at least one declared command. */
   commands?: CommandEvidence[];
+  /** Present in final mode when the selected change resolved to an approved plan. */
+  committedScope?: CommittedScopeReport;
   filesChecked: number;
   governedFiles: number;
   xmlFilesChecked: number;

@@ -58,6 +58,61 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
     explanation: "Two or more active change scopes write to overlapping regions, which can cause unsafe concurrent execution.",
     remediation: ["Do not run overlapping observed writes in parallel-safe mode.", "Sequence the changes or split scopes to eliminate the overlap."],
   },
+  "scope.committed-outside": {
+    title: "Committed Write Outside Scope",
+    explanation: "A commit owned by the change wrote a file outside the final ObservedWriteScope of its plan.",
+    remediation: ["Revert the write, or widen ObservedWriteScope in a separate commit that touches only .grace/ before writing the file again.", "Tag every commit of the change with its Change trailer so the check can attribute it."],
+  },
+  "scope.widening-with-code": {
+    title: "Widening Committed With Code",
+    explanation: "A file was admitted to ObservedWriteScope by a widening commit that also wrote outside .grace/. The admission must be reviewable before the file is written.",
+    remediation: ["Commit the plan.xml widening on its own, touching nothing outside .grace/.", "Write the newly admitted files in a later commit."],
+  },
+  "scope.written-before-widening": {
+    title: "Written Before Widening",
+    explanation: "A file was written in the commit that admitted it to ObservedWriteScope, or before that commit, so the write was not covered by the scope at the time.",
+    remediation: ["Widen ObservedWriteScope first, in its own commit, and write the file afterwards.", "If the write was in error, revert it."],
+  },
+  "scope.written-before-approval": {
+    title: "Written Before Approval",
+    explanation: "A commit owned by the change wrote a file before its plan was approved.",
+    remediation: ["Approve the plan before writing governed files.", "Move earlier writes to a separate change, or supersede this change with a new C-* bundle."],
+  },
+  "scope.approved-plan-mutated": {
+    title: "Approved Plan Mutated",
+    explanation: "An approved plan.xml changed in a section other than ObservedWriteScope without a re-approval.",
+    remediation: ["Restore the approved sections of plan.xml.", "To change them, create a new C-* bundle and mark the old bundle superseded."],
+  },
+  "scope.approval-uncommitted": {
+    title: "Approval Not Committed",
+    explanation: "No commit has the plan as approved, so the committed-scope check has no approval base to compare against.",
+    remediation: ["Commit the approved plan.xml and spec.xml before the change's code.", "Run the final check again after the approval commit exists."],
+  },
+  "scope.no-owned-commits": {
+    title: "No Commits Owned By The Change",
+    explanation: "The ObservedWriteScope is not <None />, yet no commit in the change's window carries its Change trailer, so no committed write can be attributed. It is an error when requireChangeTrailers is true in .grace-lint.json.",
+    remediation: ["Add a Change: C-* trailer to the commits of the change.", "Set requireChangeTrailers in .grace-lint.json to make this an error."],
+  },
+  "scope.reapproval-widened": {
+    title: "Re-approval Widened Scope",
+    explanation: "A re-approval of the plan added entries to ObservedWriteScope. The additions were approved together with other plan changes rather than as a separate widening.",
+    remediation: ["Confirm the added scope entries are intended.", "Prefer a separate widening commit that touches nothing outside .grace/."],
+  },
+  "scope.widened-far": {
+    title: "Widened Scope Far From Approval",
+    explanation: "A file admitted by a widening lies far from the scope approved earlier, rather than next to a file or package it already covered.",
+    remediation: ["Confirm the file belongs to this change.", "If it does not, remove it from ObservedWriteScope and move the work to its own change."],
+  },
+  "scope.untagged-commit": {
+    title: "Untagged Commit In Scope",
+    explanation: "A commit with no effective Change trailer touched files in the final ObservedWriteScope of this change, so it cannot be attributed to any change.",
+    remediation: ["Add the Change: C-* trailer to commits of the change.", "Use requireChangeTrailers in .grace-lint.json to enforce trailers."],
+  },
+  "scope.committed-check-skipped": {
+    title: "Committed-Scope Check Skipped",
+    explanation: "The committed-scope check could not read the history: the project is not a git worktree, or the repository is a shallow clone.",
+    remediation: ["Run the final check in a full git checkout.", "Fetch the full history before running the final check in CI."],
+  },
   "change.superseded-missing-replacement": {
     title: "Superseded Change Missing Replacement Reference",
     explanation: "A GraceChangeSpec or GraceChangePlan with status='superseded' should name the replacement C-* anchor via a <Replacement> or <ReplacementChange> child tag.",
