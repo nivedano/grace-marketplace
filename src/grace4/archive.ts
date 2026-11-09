@@ -4,7 +4,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import path from "node:path";
 import { defineCommand, type CommandDef, runMain } from "citty";
 
+import { committedScopeExemptGlobs, loadGraceLintConfig } from "../lint/config";
 import { GraceCommandError, runGraceCommand } from "../query/errors";
+import { checkCommittedScope, type CommittedScopeReport } from "./committed-scope";
 import { detectGraceProjectKind, resolveGrace4Paths } from "./project";
 import { projectSlug, resolveLogRoot } from "./run-log-store";
 import { ANCHOR_PATTERNS } from "./types";
@@ -61,6 +63,10 @@ export type ArchiveResult = {
   from: string;
   to: string;
   evidence: ArchiveEvidence;
+  /** Committed-scope report for the change; the archive proceeds only when it holds no error. */
+  committedScope: CommittedScopeReport;
+  /** Warning-severity issues of the committed-scope check, in the order the check raised them. */
+  committedScopeWarnings: { code: string; message: string }[];
   statusFlips: ArchiveStatusFlip[];
   moveMode: "git" | "filesystem";
   /** True when the rename and the flipped content were staged. The archive never commits. */
@@ -362,8 +368,49 @@ function inspectGitContext(root: string, bundleRelative: string, archiveRelative
   return { available: true, tracked: isTracked };
 }
 
+/** Cap on the issues named in a committed-scope refusal; the rest are counted. */
+const REFUSAL_ISSUE_CAP = 10;
+
 /**
- * Archives one active change bundle: verifies a passing final run, refuses a dirty index, flips
+ * Runs the committed-scope check with the project's lint configuration and refuses on any error-severity
+ * issue. Warnings never refuse; they are returned with the report.
+ */
+function requireCommittedScope(root: string, changeId: string): { report: CommittedScopeReport; warnings: { code: string; message: string }[] } {
+  const { config } = loadGraceLintConfig(root);
+  const { issues, report } = checkCommittedScope(root, changeId, {
+    requireChangeTrailers: config?.requireChangeTrailers ?? false,
+    exempt: committedScopeExemptGlobs(config),
+  });
+  const errors = issues.filter((entry) => entry.severity === "error");
+  if (report.failed) {
+    throw refuse(
+      `The committed-scope check for ${changeId} could not run (scope.committed-check-failed): ${report.failed}. `
+      + "Fix the git error and run grace archive again; nothing was written.",
+    );
+  }
+  // scope.approval-uncommitted is the only error a new commit clears; the check returns before classifying anything else.
+  if (errors.length > 0 && errors.every((entry) => entry.code === "scope.approval-uncommitted")) {
+    throw refuse(
+      `The committed-scope check for ${changeId} found no committed approval (scope.approval-uncommitted ${errors[0]!.file}). `
+      + "Commit the approved plan.xml, rerun the final gate, then run grace archive again. Nothing was written.",
+    );
+  }
+  if (errors.length > 0) {
+    const listed = errors.slice(0, REFUSAL_ISSUE_CAP).map((entry) => `${entry.code} ${entry.file}`);
+    const more = errors.length > listed.length ? ` and ${errors.length - listed.length} more` : "";
+    throw refuse(
+      `The committed-scope check for ${changeId} found ${errors.length} error(s): ${listed.join("; ")}${more}. `
+      + "They are fixed in history, and no new commit clears them: stop and report them to the user, who chooses "
+      + "between rewriting unpublished history and superseding the bundle. Nothing was written.",
+    );
+  }
+  const warnings = issues.filter((entry) => entry.severity === "warning").map((entry) => ({ code: entry.code, message: entry.message }));
+  return { report, warnings };
+}
+
+/**
+ * Archives one active change bundle: verifies a passing final run, refuses a dirty index, refuses on
+ * committed-scope errors, flips
  * both root statuses to `applied`, and moves the bundle into .grace/changes/archive. The move is
  * staged when git owns the bundle and is never committed. Every precondition is checked before
  * the first byte is written, and a failed move restores the pre-flip artifact contents.
@@ -416,6 +463,7 @@ export async function archiveChange(projectRoot: string, options: ArchiveOptions
   const evidence = requireFinalRunEvidence(root, options, warnings);
   const git = inspectGitContext(root, bundleRelative, destinationRelative, evidence.headVerified, warnings);
   const useGit = git.available && git.tracked;
+  const { report: committedScope, warnings: committedScopeWarnings } = requireCommittedScope(root, options.changeId);
 
   for (const artifact of pending) {
     writeFileSync(artifact.file, artifact.flipped);
@@ -468,11 +516,58 @@ export async function archiveChange(projectRoot: string, options: ArchiveOptions
     from: bundleRelative,
     to: destinationRelative,
     evidence,
+    committedScope,
+    committedScopeWarnings,
     statusFlips: pending.map((artifact) => ({ file: `${destinationRelative}/${path.basename(artifact.file)}`, from: APPROVED_STATUS, to: APPLIED_STATUS })),
     moveMode: useGit ? "git" : "filesystem",
     staged: useGit,
     warnings,
   };
+}
+
+/** Cap on the entries of one committed-scope text list, as in the lint report; the rest are counted. */
+const COMMITTED_SCOPE_LIST_CAP = 20;
+
+/** At most 20 entries joined with commas, then a count of the rest. */
+function capInline(entries: string[]): string {
+  const shown = entries.slice(0, COMMITTED_SCOPE_LIST_CAP).join(", ");
+  return entries.length > COMMITTED_SCOPE_LIST_CAP ? `${shown}, … ${entries.length - COMMITTED_SCOPE_LIST_CAP} more` : shown;
+}
+
+/** True when the check classified committed files: it ran, and the change owns at least one commit. */
+function classifiedCommittedFiles(report: CommittedScopeReport): boolean {
+  return !report.skipped && report.ownedCommits > 0;
+}
+
+/**
+ * Renders the committed-scope report as the `Committed scope` text section. When the check was skipped or the
+ * change owns no commit, the file lists are replaced by a statement that nothing was classified and the warning
+ * that explains it, so an empty list is never read as a clean result.
+ */
+function formatCommittedScope(report: CommittedScopeReport, warnings: { code: string; message: string }[]): string[] {
+  const listing = (label: string, entries: string[]) => [`- ${label}: ${entries.length > 0 ? capInline(entries) : "none"}`];
+  const warningLines = warnings.map((warning) => `- Warning ${warning.code}: ${warning.message}`);
+  if (report.skipped) {
+    return ["Committed scope", `- Check skipped (${report.skipped}); nothing was classified.`, ...warningLines];
+  }
+  const planHistory = [
+    ...listing("Plan amendments", report.amendments.map((entry) => `${entry.commit} (${entry.sections.join(", ")})`)),
+    ...listing("Re-approval additions", report.reapprovalAdded.flatMap((entry) => entry.added.map((added) => `${added} (${entry.commit})`))),
+    ...listing("Re-approval gate changes", report.reapprovalChangedGates.map((entry) => `${entry.commit} (${entry.sections.join(", ")})`)),
+  ];
+  if (!classifiedCommittedFiles(report)) {
+    return ["Committed scope", "- Owned commits: 0", "- No owned commits; nothing was classified.", ...planHistory, ...warningLines];
+  }
+  return [
+    "Committed scope",
+    `- Owned commits: ${report.ownedCommits}`,
+    ...listing("Within approved scope", report.approved),
+    ...listing("Widened near", report.widenedNear),
+    ...listing("Widened far", report.widenedFar),
+    ...planHistory,
+    ...listing("Exempt", report.exempt),
+    ...(report.untaggedInScope.length > 0 ? [`- Untagged commits in scope: ${capInline(report.untaggedInScope)}`] : []),
+  ];
 }
 
 /** Renders one archive result as the human-readable report. */
@@ -492,11 +587,20 @@ export function formatArchiveText(result: ArchiveResult): string {
     "",
     "Status Flips",
     ...result.statusFlips.map((flip) => `- ${flip.file}: ${flip.from} -> ${flip.to}`),
+    "",
+    ...formatCommittedScope(result.committedScope, result.committedScopeWarnings),
   ];
   if (result.warnings.length > 0) {
     lines.push("", "Warnings", ...result.warnings.map((warning) => `- ${warning}`));
   }
-  lines.push("", "Next Action", "- Review the staged bundle and commit the archive yourself; grace archive never commits.");
+  lines.push(
+    "",
+    "Next Action",
+    "- Review the staged bundle and commit the archive yourself; grace archive never commits.",
+    classifiedCommittedFiles(result.committedScope)
+      ? "- Quote the far list, the amendments, the re-approval additions and the re-approval gate changes above in the archive commit body, or state that there are none."
+      : "- State in the archive commit body that nothing was classified and quote the committed-scope warning above; quote the amendments, the re-approval additions and the re-approval gate changes.",
+  );
   return lines.join("\n");
 }
 
