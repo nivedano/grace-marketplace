@@ -470,9 +470,11 @@ function linesWith(text: string, marker: string): string[] {
 describe("approval and the re-approval window: grace-execute", () => {
   const skill = read("skills/grace/grace-execute/SKILL.md");
 
-  it("keeps the approval apart from the order to execute", () => {
+  it("keeps the approval apart from the order to execute in grace-brief's words", () => {
+    const order = "the approval is not the execution order, even when both arrive in one message, unless the message says to execute.";
+    expect(block(read(`${BRIEF_DIR}/SKILL.md`), "execution_order")).toContain(order);
     expect(block(skill, "preflight")).toContain(
-      "Start only on an explicit owner order to execute: approval of the pair and the order to execute are two separate owner statements, and an approval is not that order unless its message says to execute.",
+      `Start only on an explicit owner order to execute: approval of the pair and the order to execute are two separate owner statements, and ${order}`,
     );
   });
 
@@ -513,7 +515,7 @@ describe("approval and the re-approval window: grace-plan and the explainer", ()
     const paragraph = explainer.slice(from, explainer.indexOf("\n\n", from));
     expectAll(paragraph, [
       `If baseline/target assertions or \`DurableScope\` need to change after approval, change them ${REAPPROVAL_WINDOW}.`,
-      "`$grace-brief`",
+      "repeats through `$grace-brief` the owner's approval, preceded by the audit when `plan.xml` changed beyond its root `status`.",
     ]);
     expect(paragraph).not.toContain("verification gates");
   });
@@ -533,6 +535,20 @@ describe("approval and the re-approval window: grace-reviewer", () => {
   it("returns a re-approval after a code write as a finding", () => {
     const [after] = linesWith(review, "`scope.reapproval-after-write`");
     expect(after).toContain("Return each `scope.reapproval-after-write` error as a finding");
+    const [none] = linesWith(review, "- State that there were none");
+    expect(none).toContain("no `scope.reapproval-after-write` error is reported");
+  });
+
+  it("checks the window by reading history when no commit carries a trailer", () => {
+    const [history] = linesWith(review, "When `ownedCommits` is 0 and `approvalPoints` lists more than one commit");
+    expectAll(history, [
+      "run `git log --format=%h <first approval point>..<last approval point> -- . ':(exclude).grace'`",
+      "return each listed commit as a finding for the archive commit body",
+      "a commit that writes outside `.grace/` before a re-approval, who made it, and which change it served",
+    ]);
+    const nothing = review.indexOf("- State that nothing was classified");
+    expect(nothing).toBeGreaterThan(0);
+    expect(review.indexOf(history)).toBeGreaterThan(nothing);
   });
 });
 

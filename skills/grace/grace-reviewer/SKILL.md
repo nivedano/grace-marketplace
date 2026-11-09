@@ -12,6 +12,7 @@ description: Review GRACE 4 integrity across .grace artifacts, active changes, s
 - Return each `scope.reapproval-after-write` error as a finding: the re-approval commit and the earlier commit that writes outside `.grace/`, as its message names them.
 - State that there were none when `ownedCommits` is above 0, `skipped` is unset, no `scope.reapproval-after-write` error is reported, and `widenedFar`, `reapprovalAdded`, `amendments` and `reapprovalChangedGates` are empty.
 - State that nothing was classified when `ownedCommits` is 0 or `skipped` is set, and quote the `scope.no-owned-commits` or `scope.committed-check-skipped` warning.
+- When `ownedCommits` is 0 and `approvalPoints` lists more than one commit, run `git log --format=%h <first approval point>..<last approval point> -- . ':(exclude).grace'` and return each listed commit as a finding for the archive commit body: a commit that writes outside `.grace/` before a re-approval, who made it, and which change it served.
 </scope_widening_review>
 
 <review_checklist>
