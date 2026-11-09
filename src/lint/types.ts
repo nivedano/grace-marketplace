@@ -1,3 +1,5 @@
+import type { CommittedScopeReport } from "../grace4/committed-scope";
+
 export type LintSeverity = "error" | "warning";
 
 export type LintProfile = "standard";
@@ -41,6 +43,8 @@ export type LintResult = {
   commandsEnabled: boolean;
   /** Present when --run-commands executed at least one declared command. */
   commands?: CommandEvidence[];
+  /** Present in final mode when the selected change resolved to an approved plan. */
+  committedScope?: CommittedScopeReport;
   filesChecked: number;
   governedFiles: number;
   xmlFilesChecked: number;
@@ -80,6 +84,10 @@ export type GraceLintConfig = {
   ignoredDirs?: string[];
   /** How many non-passing command-run directories survive pruning; default 10. */
   runLogRetention?: number;
+  /** Requires change trailers on commits; default false. */
+  requireChangeTrailers?: boolean;
+  /** Globs in the ObservedWriteScope glob grammar whose files the committed-scope check lists and never classifies; default empty. */
+  committedScopeExempt?: string[];
 };
 
 export type MarkupSection = {

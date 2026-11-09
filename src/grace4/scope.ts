@@ -383,12 +383,14 @@ function extractDurableScope(root: GraceXmlNode, planFile: string): { scope: Dur
   return { scope: dedupeDurableScope(scope), issues };
 }
 
-function extractObservedWriteScope(
+/** Reads the ObservedWriteScope that is a direct child of the plan's change wrapper; nested elements do not count. */
+export function extractObservedWriteScope(
   root: GraceXmlNode,
   projectRoot: string,
   planFile: string,
 ): { scope: ObservedWriteScope; issues: Grace4Issue[] } {
-  const scopeNode = [...walkNodes(root)].find((node) => node.tag === "ObservedWriteScope");
+  const wrapper = root.children.find((node) => ANCHOR_PATTERNS.change.test(node.tag));
+  const scopeNode = wrapper?.children.find((node) => node.tag === "ObservedWriteScope");
   const scope: ObservedWriteScope = { files: [], globs: [] };
   const issues: Grace4Issue[] = [];
   if (!scopeNode) {
@@ -638,7 +640,8 @@ function detectScopeCaseSensitivity(changes: ActiveChangeScope[]): boolean {
   }
 }
 
-function defaultCaseSensitivity(): boolean {
+/** Case rule for project paths when no filesystem probe is available: case-insensitive on win32 and darwin. */
+export function defaultCaseSensitivity(): boolean {
   return process.platform !== "win32" && process.platform !== "darwin";
 }
 

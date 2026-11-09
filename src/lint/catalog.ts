@@ -7,6 +7,13 @@ type LintIssueGuide = {
   remediation: string[];
 };
 
+/**
+ * Committed-scope classification uses each file's earliest owned write, so a new commit never clears these issues;
+ * the remediation never suggests reverting and writing again or restoring sections.
+ */
+const COMMITTED_HISTORY_REMEDIATION =
+  "Stop and report the issue to the user: it is fixed in history, because the check classifies each file by its earliest owned write, so no new commit clears it. The user chooses between rewriting unpublished history and superseding the bundle.";
+
 const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
   "config.invalid-json": {
     title: "Invalid Lint Config JSON",
@@ -27,6 +34,16 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
     title: "Invalid Run Log Retention",
     explanation: "`runLogRetention` in .grace-lint.json sets how many non-passing --run-commands log directories to keep, so it must be a non-negative integer.",
     remediation: ["Set runLogRetention to a non-negative integer, for example 25.", "Remove the key to use the default of 10."],
+  },
+  "config.invalid-require-change-trailers": {
+    title: "Invalid Require Change Trailers",
+    explanation: "`requireChangeTrailers` in .grace-lint.json switches change-trailer requirements on or off, so it must be a boolean.",
+    remediation: ["Set requireChangeTrailers to true or false.", "Remove the key to use the default of false."],
+  },
+  "config.invalid-committed-scope-exempt": {
+    title: "Invalid Committed Scope Exempt",
+    explanation: "`committedScopeExempt` in .grace-lint.json lists bookkeeping files that the committed-scope check reports but never classifies, so it must be an array of globs in the ObservedWriteScope glob grammar: project-relative literals, *, ? and a whole-segment **.",
+    remediation: ["Write each entry as a project-relative glob such as .beads/**.", "Remove the key to exempt nothing."],
   },
   "analysis.adapter-failed": {
     title: "Language Adapter Failed",
@@ -52,6 +69,76 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
     title: "Observed Write Overlap",
     explanation: "Two or more active change scopes write to overlapping regions, which can cause unsafe concurrent execution.",
     remediation: ["Do not run overlapping observed writes in parallel-safe mode.", "Sequence the changes or split scopes to eliminate the overlap."],
+  },
+  "scope.committed-outside": {
+    title: "Committed Write Outside Scope",
+    explanation: "A commit owned by the change wrote a file outside the final ObservedWriteScope of its plan, or inside it but never admitted by the approval, a re-approval or a widening commit.",
+    remediation: [COMMITTED_HISTORY_REMEDIATION, "In later changes, widen ObservedWriteScope in a commit that touches only .grace/ before the first write of a file outside it."],
+  },
+  "scope.widening-with-code": {
+    title: "Widening Committed With Code",
+    explanation: "A file was admitted to ObservedWriteScope by a widening commit that also wrote outside .grace/. The admission must be reviewable before the file is written.",
+    remediation: [COMMITTED_HISTORY_REMEDIATION, "In later changes, commit a plan.xml widening on its own, touching nothing outside .grace/, and write the admitted files in a later commit."],
+  },
+  "scope.written-before-widening": {
+    title: "Written Before Widening",
+    explanation: "A file was written in the widening commit that admitted it to ObservedWriteScope, before that commit, or before the re-approval that admitted it, so the write was not covered by the scope at the time.",
+    remediation: [COMMITTED_HISTORY_REMEDIATION, "In later changes, commit the widening first, on its own, and write the file afterwards."],
+  },
+  "scope.written-before-approval": {
+    title: "Written Before Approval",
+    explanation: "A commit owned by the change wrote a file before its plan was approved.",
+    remediation: [COMMITTED_HISTORY_REMEDIATION, "In later changes, commit the approved plan.xml in or before the first commit that writes outside .grace/."],
+  },
+  "scope.approved-plan-mutated": {
+    title: "Approved Plan Mutated",
+    explanation: "An approved plan.xml changed in a gate section without a re-approval: BaselineAssertions, TargetAssertions, DurableScope, the root or C-* wrapper, or any section other than ObservedWriteScope, ImplementationPlan and IntentSummary. An unparseable approved version counts as well.",
+    remediation: [COMMITTED_HISTORY_REMEDIATION, "In later changes, change BaselineAssertions, TargetAssertions or DurableScope only through a new C-* bundle, and mark the old bundle superseded."],
+  },
+  "scope.approved-plan-amended": {
+    title: "Approved Plan Amended",
+    explanation: "An approved plan.xml changed only in ImplementationPlan tasks or IntentSummary, without a re-approval. Such an amendment needs the user's agreement and is investigated at review.",
+    remediation: ["Confirm the user agreed to the amendment and that its commit body records that agreement.", "Commit an amendment on its own, touching nothing outside .grace/."],
+  },
+  "scope.approval-uncommitted": {
+    title: "Approval Not Committed",
+    explanation: "No commit has the plan as approved, so the committed-scope check has no approval base to compare against.",
+    remediation: ["Commit the approved plan.xml in or before the first commit that writes outside .grace/.", "Run the final check again after the approval commit exists."],
+  },
+  "scope.no-owned-commits": {
+    title: "No Commits Owned By The Change",
+    explanation: "The ObservedWriteScope is not <None />, yet no commit in the change's window carries its Change trailer, so no committed write can be attributed. It is an error when requireChangeTrailers is true in .grace-lint.json.",
+    remediation: [COMMITTED_HISTORY_REMEDIATION, "In later changes, end every commit with its Change: C-* trailer; set requireChangeTrailers in .grace-lint.json to make this an error."],
+  },
+  "scope.reapproval-changed-gates": {
+    title: "Re-approval Changed Gates",
+    explanation: "A re-approval of the plan changed BaselineAssertions, TargetAssertions, DurableScope or another gate section relative to the last approved version. Gate sections change through a superseding bundle, so the re-approval is investigated at review.",
+    remediation: ["Confirm the user re-approved the changed gate sections and that the re-approval commit body records it.", "In later changes, change gate sections only through a new C-* bundle, and mark the old bundle superseded."],
+  },
+  "scope.reapproval-widened": {
+    title: "Re-approval Widened Scope",
+    explanation: "A re-approval of the plan added entries to ObservedWriteScope. The additions were approved together with other plan changes rather than as a separate widening.",
+    remediation: ["Confirm the added scope entries are intended.", "Prefer a separate widening commit that touches nothing outside .grace/."],
+  },
+  "scope.widened-far": {
+    title: "Widened Scope Far From Approval",
+    explanation: "A file admitted by a widening lies far from the scope approved earlier, rather than next to a file or package it already covered.",
+    remediation: ["Confirm the file belongs to this change.", "If it does not, remove it from ObservedWriteScope and move the work to its own change."],
+  },
+  "scope.untagged-commit": {
+    title: "Untagged Commit In Scope",
+    explanation: "A commit with no effective Change trailer touched files in the final ObservedWriteScope of this change, so it cannot be attributed to any change.",
+    remediation: [COMMITTED_HISTORY_REMEDIATION, "In later changes, end every commit of a change with its Change: C-* trailer; requireChangeTrailers in .grace-lint.json enforces trailers."],
+  },
+  "scope.committed-check-skipped": {
+    title: "Committed-Scope Check Skipped",
+    explanation: "The committed-scope check could not read the history: the project has no .git at or above its root, or the repository is a shallow clone.",
+    remediation: ["Run the final check in a full git checkout.", "Fetch the full history before running the final check in CI."],
+  },
+  "scope.committed-check-failed": {
+    title: "Committed-Scope Check Failed",
+    explanation: "A git command the committed-scope check needs failed, so the check could not run. The message names the command and carries git's stderr, for example a dubious-ownership refusal or a missing object.",
+    remediation: ["Fix the git error named in the message, for example by adding the repository to safe.directory or fetching the missing objects.", "Run the final check again."],
   },
   "change.superseded-missing-replacement": {
     title: "Superseded Change Missing Replacement Reference",
