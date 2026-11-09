@@ -645,4 +645,205 @@ describe("grace status", () => {
     expect(text).toContain("- ... 5 more unproven");
     expect(text.indexOf("Scenario Evidence")).toBeLessThan(text.indexOf("Suggested Next Action"));
   });
+
+  function initGit(root: string) {
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "grace@example.test"]);
+    runGit(root, ["config", "user.name", "GRACE Test"]);
+    runGit(root, ["config", "commit.gpgsign", "false"]);
+    runGit(root, ["config", "core.hooksPath", "disabled-hooks"]);
+  }
+
+  function commitAll(root: string, message: string) {
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", message]);
+  }
+
+  function writeDesignContext(root: string, changeId: string) {
+    writeProjectFile(
+      root,
+      `.grace/changes/active/${changeId}/design-context.xml`,
+      `<GraceChangeDesignContext graceVersion="4.0"><Change>${changeId}</Change><Rationale>Initial.</Rationale></GraceChangeDesignContext>`,
+    );
+  }
+
+  function editFile(root: string, relativePath: string, from: string, to: string) {
+    const file = path.join(root, relativePath);
+    const before = readFileSync(file, "utf8");
+    if (!before.includes(from)) throw new Error(`fixture edit missed: ${from}`);
+    writeFileSync(file, before.replace(from, to));
+  }
+
+  it("derives awaiting-approval for a draft pair", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-PAIR", { specStatus: "draft", planStatus: "draft" });
+
+    const result = await collectProjectStatus(root);
+    const states = result.changes.find((change) => change.changeId === "C-PAIR")!.derivedStates;
+    expect(states).toContain("awaiting-approval");
+    expect(states).not.toContain("integrity-issues");
+    expect(states).not.toContain("draft-spec");
+    expect(states).not.toContain("needs-plan-approval");
+    expect(states).not.toContain("ready-to-execute");
+  });
+
+  it("names the audit and the owner's approval as the next action of a draft pair", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-PAIR", { specStatus: "draft", planStatus: "draft" });
+
+    const result = await collectProjectStatus(root);
+    expect(result.nextAction).toContain("--assertions baseline");
+    expect(result.nextAction).toContain("--change C-PAIR");
+    expect(result.nextAction).toContain("--draft");
+    expect(result.nextAction).toContain("$grace-brief");
+    expect(result.nextAction).toContain("approval of spec and plan together");
+  });
+
+  it("names grace-plan as the next action of a draft spec", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeSpecOnly(root, "C-DRAFT", "draft");
+
+    const result = await collectProjectStatus(root);
+    expect(result.nextAction).toContain("$grace-plan");
+  });
+
+  it("names the audit in the needs-plan-approval next action and keeps GraceChangePlan", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-NEEDS-PLAN", { specStatus: "approved", planStatus: "draft" });
+
+    const result = await collectProjectStatus(root);
+    expect(result.nextAction).toContain("$grace-brief");
+    expect(result.nextAction).toContain("GraceChangePlan");
+  });
+
+  it("names the owner's execution order in the ready-to-execute next action", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-READY", { specStatus: "approved", planStatus: "approved" });
+
+    const result = await collectProjectStatus(root);
+    expect(result.nextAction).toContain("execution order");
+    expect(result.nextAction).toContain("$grace-execute");
+  });
+
+  it("explains uncommitted edits of a committed draft pair", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-DRAFTS", { specStatus: "draft", planStatus: "draft" });
+    writeDesignContext(root, "C-DRAFTS");
+    initGit(root);
+    commitAll(root, "test: draft pair");
+    const bundle = ".grace/changes/active/C-DRAFTS";
+    editFile(root, `${bundle}/plan.xml`, "<IntentSummary>Apply the change.</IntentSummary>", "<IntentSummary>Apply the edited change.</IntentSummary>");
+    editFile(root, `${bundle}/spec.xml`, "<Summary>Change.</Summary>", "<Summary>Edited change.</Summary>");
+    editFile(root, `${bundle}/design-context.xml`, "Initial.", "Edited.");
+
+    const result = await collectProjectStatus(root);
+    expect(result.observedDrift.changedFiles).toEqual([`${bundle}/design-context.xml`, `${bundle}/plan.xml`, `${bundle}/spec.xml`]);
+    expect(result.observedDrift.unexplainedFiles).toEqual([]);
+    expect(result.derivedStates).not.toContain("unexplained-observed-drift");
+    expect(result.changes.find((change) => change.changeId === "C-DRAFTS")!.derivedStates).toContain("awaiting-approval");
+    expect(result.nextAction).not.toContain("grace-refresh");
+    expect(result.nextAction).toContain("$grace-brief");
+  });
+
+  it("explains uncommitted edits of a committed draft spec", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeSpecOnly(root, "C-DRAFT", "draft");
+    initGit(root);
+    commitAll(root, "test: draft spec");
+    editFile(root, ".grace/changes/active/C-DRAFT/spec.xml", "<Summary>Spec only.</Summary>", "<Summary>Edited spec.</Summary>");
+
+    const result = await collectProjectStatus(root);
+    expect(result.observedDrift.unexplainedFiles).toEqual([]);
+    expect(result.nextAction).toContain("$grace-plan");
+  });
+
+  it("explains an untracked draft bundle", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    initGit(root);
+    commitAll(root, "test: baseline");
+    writeChange(root, "C-FRESH", { specStatus: "draft", planStatus: "draft" });
+    writeDesignContext(root, "C-FRESH");
+
+    const result = await collectProjectStatus(root);
+    const bundle = ".grace/changes/active/C-FRESH";
+    expect(result.observedDrift.explainedFiles).toEqual([`${bundle}/design-context.xml`, `${bundle}/plan.xml`, `${bundle}/spec.xml`]);
+    expect(result.observedDrift.unexplainedFiles).toEqual([]);
+    expect(result.nextAction).not.toContain("grace-refresh");
+  });
+
+  it("explains an untracked draft bundle in a repository without commits", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    initGit(root);
+    writeChange(root, "C-FRESH", { specStatus: "draft", planStatus: "draft" });
+
+    const result = await collectProjectStatus(root);
+    expect(result.observedDrift.explainedFiles).toContain(".grace/changes/active/C-FRESH/plan.xml");
+    expect(result.observedDrift.explainedFiles).toContain(".grace/changes/active/C-FRESH/spec.xml");
+  });
+
+  it("does not explain an artifact approved in HEAD by the draft rule", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-APPROVED", { specStatus: "approved", planStatus: "approved" });
+    initGit(root);
+    commitAll(root, "test: approved pair");
+    const bundle = ".grace/changes/active/C-APPROVED";
+    editFile(root, `${bundle}/plan.xml`, "<MustExist><Value>M-EXAMPLE</Value></MustExist>", "<MustExist><Value>src/example.ts</Value></MustExist>");
+
+    const result = await collectProjectStatus(root);
+    expect(result.observedDrift.unexplainedFiles).toContain(`${bundle}/plan.xml`);
+    expect(result.changes.find((change) => change.changeId === "C-APPROVED")!.derivedStates).toContain("approved-contract-drift");
+    expect(result.nextAction).toContain("Hard stop");
+  });
+
+  it("does not explain a plan returned to draft with content edits when HEAD approves it", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-RETURN", { specStatus: "approved", planStatus: "approved" });
+    initGit(root);
+    commitAll(root, "test: approved pair");
+    const bundle = ".grace/changes/active/C-RETURN";
+    editFile(root, `${bundle}/plan.xml`, 'status="approved"', 'status="draft"');
+    editFile(root, `${bundle}/plan.xml`, "<MustExist><Value>M-EXAMPLE</Value></MustExist>", "<MustExist><Value>src/example.ts</Value></MustExist>");
+
+    const result = await collectProjectStatus(root);
+    expect(result.observedDrift.unexplainedFiles).toContain(`${bundle}/plan.xml`);
+  });
+
+  it("does not explain a draft design-context while HEAD approves the plan", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-DC", { specStatus: "approved", planStatus: "approved" });
+    writeDesignContext(root, "C-DC");
+    initGit(root);
+    commitAll(root, "test: approved pair");
+    const bundle = ".grace/changes/active/C-DC";
+    editFile(root, `${bundle}/spec.xml`, 'status="approved"', 'status="draft"');
+    editFile(root, `${bundle}/plan.xml`, 'status="approved"', 'status="draft"');
+    editFile(root, `${bundle}/design-context.xml`, "Initial.", "Edited.");
+
+    const result = await collectProjectStatus(root);
+    expect(result.observedDrift.unexplainedFiles).toContain(`${bundle}/design-context.xml`);
+    expect(result.observedDrift.unexplainedFiles).toContain(`${bundle}/spec.xml`);
+    expect(result.observedDrift.unexplainedFiles).toContain(`${bundle}/plan.xml`);
+  });
+
+  it("derives awaiting-approval for a draft pair outside git", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, "C-NOGIT", { specStatus: "draft", planStatus: "draft" });
+
+    const result = await collectProjectStatus(root);
+    expect(result.observedDrift.available).toBe(false);
+    expect(result.changes.find((change) => change.changeId === "C-NOGIT")!.derivedStates).toContain("awaiting-approval");
+  });
 });

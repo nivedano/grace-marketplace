@@ -159,6 +159,8 @@ function deriveChangeStates(facts: ChangeBundleFacts): string[] {
   }
   if (facts.location === "active" && facts.specStatus === "draft" && !facts.planStatus) {
     states.push("draft-spec");
+  } else if (facts.location === "active" && facts.specStatus === "draft" && facts.planStatus === "draft") {
+    states.push("awaiting-approval");
   } else if (facts.location === "active" && facts.specStatus === "approved" && !facts.planStatus) {
     states.push("needs-plan");
   } else if (facts.location === "active" && facts.specStatus === "approved" && facts.planStatus === "draft") {
@@ -186,9 +188,12 @@ function chooseNextAction(result: Omit<StatusResult, "nextAction">) {
   if (result.derivedStates.includes("approved-plan-amendment-pending")) return "Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body.";
   if (result.derivedStates.includes("unexplained-observed-drift")) return "Use $grace-refresh to reconcile unexplained repository changes through a new GraceChangeSpec and GraceChangePlan.";
   if (result.derivedStates.includes("scope-overlap")) return "Review active change scope overlaps; replan or execute sequentially before parallel-safe work.";
-  if (result.changes.some((change) => change.derivedStates.includes("ready-to-execute"))) return "Run $grace-execute for approved active changes.";
+  if (result.changes.some((change) => change.derivedStates.includes("ready-to-execute"))) return "Await the owner's explicit execution order, then run $grace-execute for approved active changes. The approval is not that order.";
   if (result.changes.some((change) => change.derivedStates.includes("needs-plan"))) return "Run $grace-plan for the approved GraceChangeSpec.";
-  if (result.changes.some((change) => change.derivedStates.includes("needs-plan-approval"))) return "Review and approve the draft GraceChangePlan, or replan if stale.";
+  if (result.changes.some((change) => change.derivedStates.includes("needs-plan-approval"))) return "Run the audit ($grace-brief) on the draft GraceChangePlan, scoped to the change against the last approved plan when one exists, then obtain the owner's approval of the plan.";
+  const awaitingApproval = result.changes.find((change) => change.derivedStates.includes("awaiting-approval"));
+  if (awaitingApproval) return `Run grace lint --assertions baseline --change ${awaitingApproval.changeId} --draft and the audit skill $grace-brief, then obtain the owner's approval of spec and plan together.`;
+  if (result.changes.some((change) => change.derivedStates.includes("draft-spec"))) return "Run $grace-plan on the draft GraceChangeSpec.";
   if (result.summary.activeChanges === 0) return "Create a change with $grace-spec, then plan it with $grace-plan.";
   return "Project is healthy. Continue with the next approved GRACE 4 workflow step.";
 }
@@ -255,7 +260,7 @@ export async function collectProjectStatus(
     ...collectChangeBundleStatuses(root, "active", paths.changesActiveDir, lint.issues),
     ...collectChangeBundleStatuses(root, "archive", paths.changesArchiveDir, lint.issues),
   ];
-  const collectedDrift = collectObservedDrift(root, activeScopes, buildDriftRouteIndex(root, graph, verification));
+  const collectedDrift = collectObservedDrift(root, activeScopes, buildDriftRouteIndex(root, graph, verification), rawChanges);
   const observedDrift = collectedDrift.drift;
   const approvedContractDrift = collectApprovedContractDrift(root, activeScopes, collectedDrift.trackedChangedFiles, collectedDrift.planEditPending);
   const changes = rawChanges.map((change) => {
@@ -402,7 +407,7 @@ function formatScenarioEvidenceText(report: ScenarioEvidenceReport): string[] {
   return lines;
 }
 
-function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], routes: DriftRouteIndex): CollectedObservedDrift {
+function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], routes: DriftRouteIndex, bundles: ChangeBundleStatus[]): CollectedObservedDrift {
   const statusResult = runGit(root, ["-c", "status.relativePaths=true", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]);
   if (statusResult.exitCode !== 0) {
     return { drift: { available: false, changedFiles: [], explainedFiles: [], unexplainedFiles: [] }, trackedChangedFiles: new Set(), planEditPending: new Map() };
@@ -413,7 +418,8 @@ function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], r
 
   const approvedScopes = activeScopes.filter((scope) => scope.specStatus === "approved" && scope.planStatus === "approved");
   const planEditPending = collectPlanEditPending(root, approvedScopes, trackedChangedFiles);
-  const explainedFiles = changedFiles.filter((file) => approvedScopes.some((scope) => activeScopeExplainsFile(root, scope, file, routes, trackedChangedFiles, planEditPending)));
+  const draftBundleFiles = collectDraftBundleFiles(root, bundles);
+  const explainedFiles = changedFiles.filter((file) => draftBundleFiles.has(file) || approvedScopes.some((scope) => activeScopeExplainsFile(root, scope, file, routes, trackedChangedFiles, planEditPending)));
   const explained = new Set(explainedFiles);
   return {
     drift: {
@@ -430,6 +436,48 @@ function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], r
 /** The git entry point of grace status: piped stdout and stderr, never inherited. The committed-scope check has its own. */
 function runGit(cwd: string, args: string[]) {
   return Bun.spawnSync({ cmd: ["git", ...args], cwd, stdout: "pipe", stderr: "pipe" });
+}
+
+/** The status of one artifact as committed in HEAD, for the states that compare the working tree against it. */
+export type HeadArtifactStatus = "draft" | "approved" | "other" | "untracked";
+
+/**
+ * Reads the root `status` of a project-relative artifact as committed in HEAD.
+ * `null` means there is no git repository or no HEAD; `untracked` means HEAD does not contain the file;
+ * `other` means the file is in HEAD with a status that is neither `draft` nor `approved`, or cannot be read.
+ */
+export function readHeadStatus(root: string, relativePath: string): HeadArtifactStatus | null {
+  const normalized = relativePath.replaceAll(path.sep, "/");
+  if (runGit(root, ["rev-parse", "--verify", "--quiet", "HEAD"]).exitCode !== 0) return null;
+  const shown = runGit(root, ["show", `HEAD:./${normalized}`]);
+  if (shown.exitCode !== 0) return "untracked";
+  try {
+    const status = parseGraceXmlArtifact(normalized, new TextDecoder().decode(shown.stdout)).root?.attributes.status;
+    return status === "draft" || status === "approved" ? status : "other";
+  } catch {
+    return "other";
+  }
+}
+
+/**
+ * Draft artifacts are not drift. A bundle `spec.xml` or `plan.xml` that is `draft` in the working tree and is `draft`
+ * in HEAD, or absent from it, belongs to its bundle. So does the bundle's `design-context.xml` while its `plan.xml` is
+ * not `approved` in HEAD. An artifact `approved` in HEAD is never listed. Read from the bundle listing, because a
+ * draft bundle has no scope. Without a HEAD nothing is approved, so every draft artifact is listed.
+ */
+function collectDraftBundleFiles(root: string, bundles: ChangeBundleStatus[]): Set<string> {
+  const explained = new Set<string>();
+  for (const bundle of bundles) {
+    if (bundle.location !== "active") continue;
+    const bundlePath = bundle.path.replaceAll(path.sep, "/");
+    const specHead = readHeadStatus(root, `${bundlePath}/spec.xml`);
+    const planHead = readHeadStatus(root, `${bundlePath}/plan.xml`);
+    const draftInHead = (head: HeadArtifactStatus | null) => head === null || head === "draft" || head === "untracked";
+    if (bundle.specStatus === "draft" && draftInHead(specHead)) explained.add(`${bundlePath}/spec.xml`);
+    if (bundle.planStatus === "draft" && draftInHead(planHead)) explained.add(`${bundlePath}/plan.xml`);
+    if (planHead !== "approved") explained.add(`${bundlePath}/design-context.xml`);
+  }
+  return explained;
 }
 
 /**
