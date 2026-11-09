@@ -28,22 +28,25 @@ Lint, status, and navigation commands validate before returning records. JSON ar
 <committed_scope_contract>
 `--change C-ID --assertions final` also runs the committed-scope check and adds a `committedScope` section to the text and JSON report. The check classifies each commit from the bundle's first commit that contains `spec.xml` or `plan.xml` against the `ObservedWriteScope` of the approved plan. Other assertion modes skip it.
 Errors:
-- `scope.committed-outside`: a commit carrying the change's `Change` trailer wrote a file outside the final `ObservedWriteScope`.
+- `scope.committed-outside`: a commit carrying the change's `Change` trailer wrote a file outside the final `ObservedWriteScope`, or in it but never admitted.
 - `scope.widening-with-code`: a widening commit that admitted a file also wrote outside `.grace/`.
-- `scope.written-before-widening`: a file was written in the commit that admitted it, or before it.
+- `scope.written-before-widening`: a file was written in the widening commit that admitted it, before that commit, or before the re-approval that admitted it.
 - `scope.written-before-approval`: a commit carrying the change's `Change` trailer wrote a file before the plan was approved.
 - `scope.approved-plan-mutated`: an approved plan changed outside `ObservedWriteScope` without a re-approval, in a direct section other than `ImplementationPlan` or `IntentSummary`, in section order, or with `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` nested inside either of those sections.
 - `scope.approval-uncommitted`: no commit has `plan.xml` committed as `approved`; commit the approved `plan.xml`. Writes committed before it are reported as `scope.written-before-approval`.
 - `scope.no-owned-commits`: the scope is not `<None />` and no commit carries the `Change: <C-ID>` trailer; an error when `requireChangeTrailers` is `true`, otherwise a warning.
+- `scope.committed-check-failed`: a git command the check needs failed, for example a dubious-ownership refusal; the message names the command and carries git's stderr.
+Treat a committed-scope error as fixed in history, since no new commit clears it: stop and report it to the user, who chooses between rewriting unpublished history and superseding the bundle.
 Warnings:
 - `scope.approved-plan-amended`: an approved plan changed outside `ObservedWriteScope` only in `ImplementationPlan` or `IntentSummary`, with no `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` nested inside either version; the report lists each such commit under `amendments`.
 - `scope.reapproval-widened`: a re-approval added `ObservedWriteScope` entries.
+- `scope.reapproval-changed-gates`: a re-approval changed `BaselineAssertions`, `TargetAssertions` or `DurableScope` relative to the last approved version; the report lists each such commit under `reapprovalChangedGates`.
 - `scope.widened-far`: an admitted file lies outside the directories and packages of the approved scope.
 - `scope.untagged-commit`: a commit without an effective `Change` trailer touched a file in the final scope; a merge commit, or a trailer naming no active bundle, counts as untagged.
-- `scope.committed-check-skipped`: the project is not a git worktree, or the clone is shallow.
+- `scope.committed-check-skipped`: no `.git` is found at or above the project root, or the clone is shallow.
 Set `requireChangeTrailers` (boolean) in `.grace-lint.json`; it defaults to `false`.
 Set `committedScopeExempt` (array of globs in the `ObservedWriteScope` glob grammar, for example `["tracker/**"]`) in `.grace-lint.json`; matching files are listed under `exempt` in the `committedScope` report and are never classified or counted as writes outside `.grace/`. An invalid value raises `config.invalid-committed-scope-exempt`.
-`grace status` derives `approved-scope-widening-pending` for an uncommitted `ObservedWriteScope`-only widening of an approved plan, and `approved-plan-amendment-pending` for an uncommitted amendment (optionally with a superset widening); its next action is "Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body." An edit to any other section of an approved `plan.xml`, a narrowed `ObservedWriteScope`, or any edit to `spec.xml` stays `approved-contract-drift`, a hard stop. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them. Write the admitted files only after that commit.
+`grace status` derives `approved-scope-widening-pending` for an uncommitted `ObservedWriteScope`-only widening of an approved plan, with the next action "Commit the widening on its own, touching nothing outside .grace/, before writing the newly admitted files.", and `approved-plan-amendment-pending` for an uncommitted amendment (optionally with a superset widening), with the next action "Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body." An edit to any other section of an approved `plan.xml`, a narrowed `ObservedWriteScope`, or any edit to `spec.xml` stays `approved-contract-drift`, a hard stop. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them. Write the admitted files only after that commit.
 </committed_scope_contract>
 
 <runtime_contract>

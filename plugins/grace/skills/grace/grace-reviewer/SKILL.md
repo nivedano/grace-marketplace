@@ -8,7 +8,8 @@ description: Review GRACE 4 integrity across .grace artifacts, active changes, s
 - Read `committedScope` from the final `grace lint` output; it lists `ObservedWriteScope` widenings, amendments and exempt files.
 - Return each `far` file (`widenedFar`) and each re-approval addition (`reapprovalAdded`) as a finding for the archive commit body: who asked, who agreed, why the plan missed the file, and whether the miss was avoidable.
 - Return each `amendments` entry as a finding for the archive commit body: who asked, who agreed, why the plan changed.
-- State that there were none when `widenedFar`, `reapprovalAdded` and `amendments` are empty.
+- Return each `reapprovalChangedGates` entry as a finding for the archive commit body: who asked, who agreed, which gate sections changed, and why no superseding bundle was created.
+- State that there were none when `widenedFar`, `reapprovalAdded`, `amendments` and `reapprovalChangedGates` are empty.
 </scope_widening_review>
 
 <review_checklist>

@@ -10,6 +10,9 @@ const WIDENING_FORMULA =
 const AMENDMENT_FORMULA =
   "Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them.";
 
+const HISTORY_FORMULA =
+  "Treat a committed-scope error as fixed in history, since no new commit clears it: stop and report it to the user, who chooses between rewriting unpublished history and superseding the bundle.";
+
 const SKILL_FILES = [
   "skills/grace/grace-execute/SKILL.md",
   "skills/grace/grace-plan/SKILL.md",
@@ -31,6 +34,19 @@ function slice(text: string, start: string, end: string): string {
   return text.slice(from, to + end.length);
 }
 
+/** The numbered item of an ordered list that contains marker, up to the next item or the end of the block. */
+function itemContaining(block: string, marker: string): string {
+  const items = block.split(/\n(?=\d+\. )/);
+  const found = items.find((item) => /^\d+\. /.test(item) && item.includes(marker));
+  expect(found).toBeDefined();
+  return found!;
+}
+
+/** The never-edit item of grace-execute <execution_rules>, located by its text rather than its number. */
+function neverEditRule(execute: string): string {
+  return itemContaining(slice(execute, "<execution_rules>", "</execution_rules>"), "Never edit approved assertions");
+}
+
 describe("committed-scope skill contracts", () => {
   it("states the ObservedWriteScope exception wherever plans are immutable", () => {
     const execute = read("skills/grace/grace-execute/SKILL.md");
@@ -39,7 +55,7 @@ describe("committed-scope skill contracts", () => {
 
     const preflight = slice(execute, "<preflight>", "</preflight>");
     const modeSelection = slice(execute, "<mode_selection>", "</mode_selection>");
-    const rule8 = slice(execute, "\n8. ", "</execution_rules>");
+    const rule8 = neverEditRule(execute);
     const immutability = slice(plan, "<approved_plan_immutability>", "</approved_plan_immutability>");
     const explainerParagraph = slice(explainer, "Approved plans are immutable", "\n\n");
 
@@ -94,8 +110,11 @@ describe("committed-scope skill contracts", () => {
     expect(commitBlock).toContain("stop and report unexplained files");
     expect(commitBlock).not.toContain("resolve unexplained files");
     expect(wideningBlock).toContain("only after that commit");
+    expect(commitBlock).toContain(HISTORY_FORMULA);
 
-    expect(execute).not.toContain("scope_discipline");
+    for (const block of [wideningBlock, commitBlock]) {
+      expect(block).not.toContain("scope_discipline");
+    }
   });
 
   it("reviews far widenings and re-approval additions", () => {
@@ -141,10 +160,36 @@ describe("committed-scope skill contracts", () => {
       "scope.untagged-commit",
       "scope.committed-check-skipped",
       "scope.approved-plan-amended",
+      "scope.reapproval-changed-gates",
+      "scope.committed-check-failed",
     ]) {
       expect(block).toContain(code);
     }
-    expect(block.match(/scope\.[a-z-]+/g)?.filter((code, index, all) => all.indexOf(code) === index)).toHaveLength(12);
+    expect(block.match(/scope\.[a-z-]+/g)?.filter((code, index, all) => all.indexOf(code) === index)).toHaveLength(14);
+  });
+
+  it("documents re-approval gate changes, git failures and the history rule", () => {
+    const cli = read("skills/grace/grace-cli/SKILL.md");
+    const block = slice(cli, "<committed_scope_contract>", "</committed_scope_contract>");
+    const errors = block.slice(block.indexOf("Errors:"), block.indexOf("Warnings:"));
+    const warnings = block.slice(block.indexOf("Warnings:"));
+    expect(errors).toContain("- `scope.committed-check-failed`: a git command the check needs failed");
+    expect(errors).toContain("- `scope.committed-outside`: a commit carrying the change's `Change` trailer wrote a file outside the final `ObservedWriteScope`, or in it but never admitted.");
+    expect(errors).toContain("before the re-approval that admitted it");
+    expect(warnings).toContain("- `scope.reapproval-changed-gates`: a re-approval changed `BaselineAssertions`, `TargetAssertions` or `DurableScope` relative to the last approved version");
+    expect(warnings).toContain("`reapprovalChangedGates`");
+    expect(warnings).toContain("no `.git` is found at or above the project root");
+    expect(block).toContain(HISTORY_FORMULA);
+    expect(block).toContain(
+      "Commit the widening on its own, touching nothing outside .grace/, before writing the newly admitted files.",
+    );
+
+    const reviewer = read("skills/grace/grace-reviewer/SKILL.md");
+    const review = slice(reviewer, "<scope_widening_review>", "</scope_widening_review>");
+    const gates = review.split("\n").find((line) => line.includes("Return each `reapprovalChangedGates` entry"));
+    expect(gates).toContain("finding for the archive commit body");
+    const none = review.split("\n").find((line) => line.startsWith("- State that there were none"));
+    expect(none).toContain("`reapprovalChangedGates`");
   });
 
   it("states the amendment formula wherever the widening formula appears", () => {
@@ -157,7 +202,7 @@ describe("committed-scope skill contracts", () => {
       slice(execute, "<preflight>", "</preflight>"),
       slice(execute, "<mode_selection>", "</mode_selection>"),
       slice(execute, "<scope_widening>", "</scope_widening>"),
-      slice(execute, "\n8. ", "</execution_rules>"),
+      neverEditRule(execute),
       slice(plan, "<approved_plan_immutability>", "</approved_plan_immutability>"),
       slice(cli, "<committed_scope_contract>", "</committed_scope_contract>"),
       slice(explainer, "Approved plans are immutable", "\n\n"),
