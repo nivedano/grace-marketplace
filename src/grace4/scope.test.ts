@@ -4,11 +4,13 @@ import path from "node:path";
 import { describe, expect, it } from "bun:test";
 
 import { resolveGrace4Paths } from "./project";
+import { parseGraceXmlArtifact } from "./xml";
 import {
   collectActiveChangeScopes,
   detectScopeOverlaps,
   detectUnsafeConcurrentExecution,
   durableOverlaps,
+  extractObservedWriteScope,
   parseScopeGlob,
   scopeGlobsOverlap,
   type DurableOwnershipIndex,
@@ -189,5 +191,26 @@ describe("GRACE 4 scope detector", () => {
     expect(messages.some((message) => message.includes("C-FILE") && message.includes("C-GLOB"))).toBe(true);
     expect(messages.some((message) => message.includes("C-GLOB") && message.includes("C-NESTED"))).toBe(true);
     expect(messages.some((message) => message.includes("C-DISJOINT"))).toBe(false);
+  });
+
+  it("extracts only the wrapper's direct ObservedWriteScope", () => {
+    const root = createProject();
+    const planFile = path.join(root, ".grace/changes/active/C-DIRECT/plan.xml");
+    const parsed = parseGraceXmlArtifact(planFile, `<GraceChangePlan graceVersion="4.0" status="approved"><C-DIRECT><ImplementationPlan><T-001><ObservedWriteScope><File>nested/ignored.ts</File></ObservedWriteScope></T-001></ImplementationPlan><ObservedWriteScope><File>src/real.ts</File><Glob>docs/**</Glob></ObservedWriteScope></C-DIRECT></GraceChangePlan>`);
+
+    const extracted = extractObservedWriteScope(parsed.root!, root, planFile);
+
+    expect(extracted.issues).toEqual([]);
+    expect(extracted.scope).toEqual({ files: ["src/real.ts"], globs: ["docs/**"] });
+  });
+
+  it("reads no ObservedWriteScope when only a nested one exists or the wrapper is missing", () => {
+    const root = createProject();
+    const planFile = path.join(root, "plan.xml");
+    const nestedOnly = parseGraceXmlArtifact(planFile, `<GraceChangePlan graceVersion="4.0" status="approved"><C-NESTED><ImplementationPlan><T-001><ObservedWriteScope><File>nested.ts</File></ObservedWriteScope></T-001></ImplementationPlan></C-NESTED></GraceChangePlan>`);
+    const noWrapper = parseGraceXmlArtifact(planFile, `<GraceChangePlan graceVersion="4.0" status="approved"><ObservedWriteScope><File>loose.ts</File></ObservedWriteScope></GraceChangePlan>`);
+
+    expect(extractObservedWriteScope(nestedOnly.root!, root, planFile)).toEqual({ scope: { files: [], globs: [] }, issues: [] });
+    expect(extractObservedWriteScope(noWrapper.root!, root, planFile)).toEqual({ scope: { files: [], globs: [] }, issues: [] });
   });
 });
