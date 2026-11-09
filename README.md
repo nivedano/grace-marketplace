@@ -101,6 +101,7 @@ Migration cleanup is separately gated: successful current lint, fresh status pro
 | `grace-init` | Bootstrap the `.grace` skeleton, templates, and agent guidance |
 | `grace-spec` | Create an approved GRACE 4 change spec and optional design context |
 | `grace-plan` | Design assertions, scopes, tasks, and verification gates from an approved spec |
+| `grace-brief` | Audit a draft spec-and-plan pair independently, brief the owner, and record the approval |
 | `grace-execute` | Execute the approved plan in sequential or parallel-safe mode |
 | `grace-refactor` | Rename, move, split, merge, and extract modules without artifact drift |
 | `grace-setup-subagents` | Scaffold GRACE worker and reviewer presets |

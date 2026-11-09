@@ -1,0 +1,4 @@
+interface:
+  display_name: "GRACE Brief"
+  short_description: "GRACE 4 audited pair approval"
+  brand_color: "#7A5AF8"
