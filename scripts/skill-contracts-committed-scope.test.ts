@@ -11,7 +11,7 @@ const AMENDMENT_FORMULA =
   "Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them.";
 
 const HISTORY_FORMULA =
-  "Treat a committed-scope error as fixed in history, since no new commit clears it: stop and report it to the user, who chooses between rewriting unpublished history and superseding the bundle.";
+  "Treat a committed-scope error other than `scope.approval-uncommitted` and `scope.committed-check-failed` as fixed in history, since no new commit clears it: stop and report it to the user, who chooses between rewriting unpublished history and superseding the bundle.";
 
 const SKILL_FILES = [
   "skills/grace/grace-execute/SKILL.md",
@@ -176,7 +176,7 @@ describe("committed-scope skill contracts", () => {
     expect(errors).toContain("- `scope.committed-check-failed`: a git command the check needs failed");
     expect(errors).toContain("- `scope.committed-outside`: a commit carrying the change's `Change` trailer wrote a file outside the final `ObservedWriteScope`, or in it but never admitted.");
     expect(errors).toContain("before the re-approval that admitted it");
-    expect(warnings).toContain("- `scope.reapproval-changed-gates`: a re-approval changed `BaselineAssertions`, `TargetAssertions` or `DurableScope` relative to the last approved version");
+    expect(warnings).toContain("- `scope.reapproval-changed-gates`: a re-approval changed `BaselineAssertions`, `TargetAssertions`, `DurableScope` or another section outside `ObservedWriteScope`, `ImplementationPlan` and `IntentSummary` relative to the last approved version");
     expect(warnings).toContain("`reapprovalChangedGates`");
     expect(warnings).toContain("no `.git` is found at or above the project root");
     expect(block).toContain(HISTORY_FORMULA);
