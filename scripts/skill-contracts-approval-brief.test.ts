@@ -20,7 +20,7 @@ const SHARED_REAPPROVAL_SENTENCES = [
   "Put every change of `BaselineAssertions`, `TargetAssertions` or `DurableScope` in section C.",
   "Without a last approved `plan.xml`, audit the pair in full.",
 ];
-const RETURN_PRECHECK ="git log --format=%h --grep='^Change: <C-ID>$' <approval-commit>..HEAD -- . ':(exclude).grace'";
+const RETURN_PRECHECK = "git log --format=%h --grep='^Change: <C-ID>$' <approval-commit>^..HEAD -- . ':(exclude).grace'";
 
 function read(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -106,17 +106,20 @@ describe("grace-brief procedure", () => {
       "add `--run-commands` when `BaselineAssertions` declares `MustPassCommand`",
       "touches only `.grace/`",
       "`Change: <C-ID>`",
+      "Fix every failure the drafts cause; quote failures that belong to other bundles in the approval record.",
     ]);
+    expect(block(skill, "preflight")).not.toContain("Fix every failure in the drafts");
   });
 
   it("dispatches an independent auditor with the bundle path and project root only", () => {
     expectAll(block(skill, "audit_dispatch"), [
       "fresh subagent, never a fork of the authoring session",
       "only the bundle path and the project root",
-      "`auditor` preset",
+      "the auditor preset that `grace-setup-subagents` installs, under whatever name the project gave it",
       "the role text of `references/auditor-role.md`",
       "\"self-audited\" in the brief and in the approval record",
     ]);
+    expect(block(skill, "audit_dispatch")).not.toContain("the project's `auditor` preset");
   });
 
   it("shows the owner nothing while section D is non-empty and states the brief budget", () => {
@@ -162,8 +165,27 @@ describe("grace-brief procedure", () => {
       "\"no commands\"",
       "the last approved commit compared against",
       "before the final trailer block that carries `Change: <C-ID>`",
-      "Keep the approval record in the commit body. When `.grace/context` names a place for approval records inside `.grace/` outside the bundle, also write a copy there in the same approval commit.",
     ]);
+  });
+
+  it("approves only the audited drafts: the approval changes the root status alone", () => {
+    expect(block(skill, "approval_commit")).toContain(
+      "Change only the root `status` of `spec.xml` and `plan.xml` against the draft bundle commit the audit read; on any other edit, set `status=\"draft\"` again, rerun from `<preflight>` with its commit, and dispatch a fresh audit.",
+    );
+  });
+
+  it("orders the status check, the optional record copy and the commit", () => {
+    const commit = block(skill, "approval_commit");
+    const check = commit.indexOf("Run `grace status --path PROJECT`; require `approval-pending-commit` and no unexplained files.");
+    const copy = commit.indexOf(
+      "After the status check, when `.grace/context` names a place for approval records inside `.grace/` outside the bundle, write a copy of the approval record there.",
+    );
+    const commitStep = commit.indexOf("Then commit the approval in one commit that touches only `.grace/`");
+    expect(check).toBeGreaterThan(0);
+    expect(copy).toBeGreaterThan(check);
+    expect(commitStep).toBeGreaterThan(copy);
+    expect(commit).toContain("Write the approval record in the commit body");
+    expect(commit).not.toContain("in the same approval commit");
   });
 
   it("keeps the approval apart from the execution order", () => {
@@ -324,6 +346,14 @@ describe("grace-setup-subagents auditor preset", () => {
     ]);
   });
 
+  it("lets presets change XML statuses only on the owner's approval statement", () => {
+    const requirements = block(read(`${SETUP_DIR}/SKILL.md`), "subagent_requirements");
+    expect(requirements).toContain(
+      "never mutate approved plans or XML statuses without the owner's approval statement relayed by the controller;",
+    );
+    expect(requirements).not.toContain("without controller approval");
+  });
+
   it("is never given the authoring transcript and says where it is installed from", () => {
     expectAll(section(preset, "Independence"), [
       "fresh subagent, never a fork of the authoring session",
@@ -336,7 +366,7 @@ describe("grace-setup-subagents auditor preset", () => {
 });
 
 /** The approval binding stated verbatim in grace-spec `<status_rules>` and grace-plan `<must_do>`. */
-const PAIR_APPROVAL = "the user explicitly approves the pair at the approval step of `$grace-brief` after the audit";
+const PAIR_APPROVAL = "the user explicitly approves the pair at the approval question of `$grace-brief` after the audit";
 /** The decision-record shape stated verbatim in grace-spec and grace-brief. */
 const DECISION_SHAPE = "as one `Decision` under `OwnerDecisions`, with `Date`, `Question`, `Chosen`, and one `Rejected` per option not taken";
 const DRAFT_PAIR_FILES = [
@@ -388,6 +418,18 @@ describe("draft pair: grace-spec", () => {
       "`$grace-brief` adds the answers of the audit loop the same way.",
     ]);
     expect(block(read(`${BRIEF_DIR}/SKILL.md`), "owner_decision")).toContain(DECISION_SHAPE);
+  });
+
+  it("creates design-context.xml without unfilled template sections and expects the missing spec.xml", () => {
+    const omit = "omitting the template sections you do not fill";
+    const decisions = block(skill, "owner_decisions");
+    expect(decisions).toContain(
+      `Create \`design-context.xml\` from \`references/design-context-template.xml\` at the first \`Decision\`, ${omit}.`,
+    );
+    expect(decisions).toContain(
+      "Until step 4 of `<workflow>` writes the draft `spec.xml`, lint reports `xml.missing-file` for the bundle's `spec.xml`; expect it during the interview.",
+    );
+    expect(block(skill, "workflow")).toContain(`create it from its template when absent, ${omit}.`);
   });
 
   it("requires design-context.xml once a decision is recorded", () => {
@@ -604,9 +646,21 @@ describe("approval lifecycle: grace-cli", () => {
   });
 
   it("qualifies approved-contract-drift for spec.xml to a spec approved in HEAD", () => {
-    expect(block(skill, "committed_scope_contract")).toContain(
-      "or any edit to `spec.xml` stays `approved-contract-drift` for a `spec.xml` approved in `HEAD`, a hard stop; only a status-only return to `draft` is `return-pending-commit`.",
+    const contract = block(skill, "committed_scope_contract");
+    expect(contract).toContain(
+      "or any edit to `spec.xml` stays `approved-contract-drift` for a `spec.xml` approved in `HEAD`, a hard stop; only `plan.xml`, alone or with `spec.xml`, returned to `draft` by its root `status` alone is `return-pending-commit`.",
     );
+    expect(contract).not.toContain("only a status-only return to `draft`");
+  });
+
+  it("states that an approval or a return that changes content stays approved-contract-drift", () => {
+    const status = block(skill, "status_contract");
+    expectAll(status, [
+      "`spec.xml` is `approved` in `HEAD` and unchanged or changed from `draft` to `approved` with it, each differing from `HEAD` only in the root `status` attribute;",
+      "An approval that also changes content stays `approved-contract-drift`.",
+      "A return of `spec.xml` alone, or a return that also changes content, stays `approved-contract-drift`.",
+      "while `plan.xml` is `draft` and not `approved` in `HEAD`",
+    ]);
   });
 
   it("names the four approval states and the wait of ready-to-execute", () => {
@@ -623,6 +677,15 @@ describe("approval lifecycle: grace-status", () => {
 
   it("reports the four approval states", () => {
     expectAll(block(skill, "must_report"), [...APPROVAL_STATES, "`--fail-on errors`"]);
+  });
+
+  it("limits the pending approval and return to plan.xml, alone or with spec.xml, by its root status alone", () => {
+    const report = block(skill, "must_report");
+    expectAll(report, [
+      "`approval-pending-commit` (`plan.xml`, alone or with `spec.xml`, set to `approved` by its root `status` alone, uncommitted)",
+      "`return-pending-commit` (`plan.xml`, alone or with `spec.xml`, returned to `draft` by its root `status` alone, uncommitted; a return of `spec.xml` alone stays `approved-contract-drift`)",
+    ]);
+    expect(report).not.toContain("an approved artifact returned to `draft`");
   });
 
   it("reports ready-to-execute as awaiting the owner's execution order", () => {
@@ -692,9 +755,44 @@ describe("approval lifecycle: README", () => {
   });
 });
 
+const BOOTSTRAP_FILES = [
+  "skills/grace/grace-init/SKILL.md",
+  "skills/grace/grace-init/assets/AGENTS.md.template",
+  "skills/grace/grace-refactor/SKILL.md",
+  "skills/grace/grace-refresh/SKILL.md",
+];
+
+describe("approval lifecycle: grace-init, grace-refactor and grace-refresh", () => {
+  it("states the draft pair, the audit, one approval and the execution order in AGENTS.md rule 1", () => {
+    const template = read("skills/grace/grace-init/assets/AGENTS.md.template");
+    const rule = template.split("\n").find((line) => line.startsWith("1. "))!;
+    expect(rule).not.toContain("before an approved active");
+    expect(rule).toBe(
+      `1. Write an active \`GraceChangeSpec\` and \`GraceChangePlan\` as drafts, audit them through \`$grace-brief\`, and implement no source behavior before one owner approval sets both to \`approved\`, unless the user explicitly requests a small direct fix. ${EXECUTION_ORDER_RULE}`,
+    );
+  });
+
+  it("recommends grace-brief and the execution order in grace-init step 5", () => {
+    const steps = block(read("skills/grace/grace-init/SKILL.md"), "steps");
+    const step = steps.split("\n").find((line) => line.startsWith("5. "))!;
+    expect(step).toBe(
+      `5. Print created files and recommend the next workflow: \`grace-spec\`, then \`grace-plan\` in the same session, both writing drafts, then \`grace-brief\` for the audit and one owner approval of the pair. ${EXECUTION_ORDER_RULE}`,
+    );
+  });
+
+  it("routes grace-refactor and grace-refresh through grace-brief", () => {
+    expect(block(read("skills/grace/grace-refactor/SKILL.md"), "scope")).toContain(
+      "Greenfield feature work should go through `grace-spec`, `grace-plan`, `grace-brief`, and `grace-execute`.",
+    );
+    expect(block(read("skills/grace/grace-refresh/SKILL.md"), "workflow")).toContain(
+      "If changes are needed, route through `grace-spec`, `grace-plan`, and `grace-brief` instead of direct mutation.",
+    );
+  });
+});
+
 describe("approval lifecycle: mirrors", () => {
   it("mirrors the edited files byte-for-byte", () => {
-    for (const file of LIFECYCLE_FILES) {
+    for (const file of [...LIFECYCLE_FILES, ...BOOTSTRAP_FILES]) {
       const packaged = path.join(repoRoot, "plugins/grace", file);
       expect(readFileSync(packaged).equals(readFileSync(path.join(repoRoot, file)))).toBe(true);
     }

@@ -11,7 +11,7 @@ description: Show GRACE 4 project health across .grace context, graph, verificat
 - Graph/verification projection integrity, routed coverage, and module counts.
 - Active/archive bundle statuses and derived states.
 - `needs-plan`, `needs-plan-approval`, `stale-plan`, `integrity-issues`, and `ready-to-execute` with readiness mutually exclusive from stale/integrity states.
-- The approval states: `awaiting-approval` (`spec.xml` and `plan.xml` both `draft`), `approval-pending-commit` (`plan.xml` set to `approved`, uncommitted), `return-pending-commit` (an approved artifact returned to `draft` by its root `status` alone, uncommitted), and `half-approval` (`spec.xml` set to `approved` while `plan.xml` is `draft`; an error that fails `--fail-on errors`).
+- The approval states: `awaiting-approval` (`spec.xml` and `plan.xml` both `draft`), `approval-pending-commit` (`plan.xml`, alone or with `spec.xml`, set to `approved` by its root `status` alone, uncommitted), `return-pending-commit` (`plan.xml`, alone or with `spec.xml`, returned to `draft` by its root `status` alone, uncommitted; a return of `spec.xml` alone stays `approved-contract-drift`), and `half-approval` (`spec.xml` set to `approved` while `plan.xml` is `draft`; an error that fails `--fail-on errors`).
 - `ready-to-execute` as awaiting the owner's explicit execution order.
 - Route-aware explained/unexplained drift, scope coexistence warnings, and parallel blockers.
 - Module-health load failure as integrity/degraded status rather than a crash.

@@ -13,7 +13,7 @@ description: Interview the user, record the user's decisions in design-context.x
 </change_bundle_contract>
 
 <status_rules>
-Create `spec.xml` as `status="draft"`. Set `status="approved"` only when the user explicitly approves the pair at the approval step of `$grace-brief` after the audit. Rejected or cancelled specs move to archive with terminal status. Do not create or edit `plan.xml` in this skill.
+Create `spec.xml` as `status="draft"`. Set `status="approved"` only when the user explicitly approves the pair at the approval question of `$grace-brief` after the audit. Rejected or cancelled specs move to archive with terminal status. Do not create or edit `plan.xml` in this skill.
 </status_rules>
 
 <strict_contract>
@@ -25,7 +25,7 @@ Add a `Goal` or `Criterion` only from one of three sources: the user asked for i
 </scope_discipline>
 
 <owner_decisions>
-- Record each decision of the user in `design-context.xml` as one `Decision` under `OwnerDecisions`, with `Date`, `Question`, `Chosen`, and one `Rejected` per option not taken, when it is made. `Date` is the day the user decided. Create `design-context.xml` from `references/design-context-template.xml` at the first `Decision`.
+- Record each decision of the user in `design-context.xml` as one `Decision` under `OwnerDecisions`, with `Date`, `Question`, `Chosen`, and one `Rejected` per option not taken, when it is made. `Date` is the day the user decided. Create `design-context.xml` from `references/design-context-template.xml` at the first `Decision`, omitting the template sections you do not fill. Until step 4 of `<workflow>` writes the draft `spec.xml`, lint reports `xml.missing-file` for the bundle's `spec.xml`; expect it during the interview.
 - Record a `Decision` for each choice between alternatives, each decline, each boundary the user fixed (scope, platform, what stays untouched), and exactly one consensus `Decision` at the end of the interview whose `Chosen` lists the theses of the design summary the user accepted. Record no accepted `Goal` or `Criterion` one by one.
 - Place `OwnerDecisions` as a direct child of the root `GraceChangeDesignContext` when the bundle identity is a `<Change>` element, after `DeferredDecisions` as in `references/design-context-template.xml`; place it as a child of the `C-*` wrapper in the wrapper form.
 - Keep `DeferredDecisions` for decisions postponed to a later change.
@@ -37,7 +37,7 @@ Add a `Goal` or `Criterion` only from one of three sources: the user asked for i
 2. Ask one focused question at a time until goal, scope, constraints, non-goals, acceptance criteria, affected areas, and verification expectations are clear. Record each decision as `<owner_decisions>` defines.
 3. Propose a concise design summary and its technical assumptions, then record the consensus `Decision`. Ask for no approval.
 4. Write `spec.xml` from `references/change-spec-template.xml` as `status="draft"`, with exactly one direct `C-*` wrapper and no empty required section. Write `Summary` and `Problem` one sentence per line. Put only technical assumptions in `Assumptions`.
-5. If rationale, alternatives, scenarios, or external constraints would otherwise bloat the spec, write them into non-normative `design-context.xml`; create it from its template when absent.
+5. If rationale, alternatives, scenarios, or external constraints would otherwise bloat the spec, write them into non-normative `design-context.xml`; create it from its template when absent, omitting the template sections you do not fill.
 6. Hand the draft `spec.xml` to `$grace-plan` in the same session.
 </workflow>
 

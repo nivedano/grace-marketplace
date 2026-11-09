@@ -14,6 +14,6 @@ Compare code, tests, and file-local markup against `.grace/context`, `.grace/gra
 3. Inspect `.grace/verification/index.xml` and routed verification documents for missing deterministic `V-M-*` coverage, stale commands, or missing evidence markers.
 4. Compare file-local `LINKS:`, module contracts, tests, and log markers against durable anchors.
 5. Report drift as findings with proposed reconciliation scope.
-6. If changes are needed, route through `grace-spec` and `grace-plan` instead of direct mutation.
+6. If changes are needed, route through `grace-spec`, `grace-plan`, and `grace-brief` instead of direct mutation.
 </workflow>
 </skill>

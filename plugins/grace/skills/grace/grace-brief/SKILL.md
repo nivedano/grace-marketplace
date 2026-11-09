@@ -11,14 +11,14 @@ description: Audit a draft GRACE 4 spec-and-plan pair through an independent sub
 - Run `grace lint --path PROJECT --assertions current`.
 - Run `grace lint --path PROJECT --change <C-ID> --assertions baseline --draft`; add `--run-commands` when `BaselineAssertions` declares `MustPassCommand`.
 - Run the project's own lint commands.
-- Fix every failure in the drafts and rerun the three checks before the audit.
+- Fix every failure the drafts cause; quote failures that belong to other bundles in the approval record. Rerun the three checks before the audit.
 - Commit the draft bundle in a commit that touches only `.grace/` and ends with the `Change: <C-ID>` trailer, so the audit and the approval record name committed artifacts.
 </preflight>
 
 <audit_dispatch>
 - Dispatch the auditor as a fresh subagent, never a fork of the authoring session.
 - Give it only the bundle path and the project root; withhold the authoring conversation and your own summary.
-- Use the project's `auditor` preset when installed; otherwise give the fresh subagent the role text of `references/auditor-role.md`.
+- Use the auditor preset that `grace-setup-subagents` installs, under whatever name the project gave it; without that preset, give the fresh subagent the role text of `references/auditor-role.md`.
 - In a harness without subagents, run `references/auditor-role.md` yourself and state "self-audited" in the brief and in the approval record.
 </audit_dispatch>
 
@@ -39,8 +39,10 @@ description: Audit a draft GRACE 4 spec-and-plan pair through an independent sub
 
 <approval_commit>
 - Set `status="approved"` on `spec.xml` and `plan.xml` together for "approve <C-ID>: spec and plan", and on `plan.xml` alone for "approve <C-ID>: plan".
+- Change only the root `status` of `spec.xml` and `plan.xml` against the draft bundle commit the audit read; on any other edit, set `status="draft"` again, rerun from `<preflight>` with its commit, and dispatch a fresh audit.
 - Run `grace status --path PROJECT`; require `approval-pending-commit` and no unexplained files.
-- Commit the approval in one commit that touches only `.grace/`, before any commit that writes outside `.grace/`.
+- After the status check, when `.grace/context` names a place for approval records inside `.grace/` outside the bundle, write a copy of the approval record there.
+- Then commit the approval in one commit that touches only `.grace/`, before any commit that writes outside `.grace/`.
 - Write the approval record in the commit body, before the final trailer block that carries `Change: <C-ID>`:
   - the theses as presented;
   - each owner decision with the owner's answer;
@@ -50,7 +52,6 @@ description: Audit a draft GRACE 4 spec-and-plan pair through an independent sub
   - the lint runs the brief stood on: the draft bundle commit the audit read, the `--assertions current` result, and the `--assertions baseline --change <C-ID> --draft` result with whether commands ran;
   - when commands ran, the run-log path and the run's per-command result lines, quoted; when `BaselineAssertions` declares no `MustPassCommand`, "no commands";
   - for a re-approval, the last approved commit compared against, or "plan unchanged apart from its status; no audit ran".
-- Keep the approval record in the commit body. When `.grace/context` names a place for approval records inside `.grace/` outside the bundle, also write a copy there in the same approval commit.
 </approval_commit>
 
 <execution_order>
@@ -61,7 +62,7 @@ description: Audit a draft GRACE 4 spec-and-plan pair through an independent sub
 <return_to_draft>
 - Return an approved `plan.xml` to `draft` only on the owner's request or agreement.
 - Re-approve only before the first commit of the change that writes outside `.grace/`; the committed-scope check reports a later re-approval as `scope.reapproval-after-write`.
-- Before the return, run `git log --format=%h --grep='^Change: <C-ID>$' <approval-commit>..HEAD -- . ':(exclude).grace'`, where `<approval-commit>` is the first commit in which `plan.xml` is `approved`.
+- Before the return, run `git log --format=%h --grep='^Change: <C-ID>$' <approval-commit>^..HEAD -- . ':(exclude).grace'`, where `<approval-commit>` is the first commit in which `plan.xml` is `approved`.
 - On any output, refuse the return: widen `ObservedWriteScope` or amend `ImplementationPlan` tasks or `IntentSummary` in place as `grace-execute` defines, or supersede the bundle.
 - On empty output, set `plan.xml` to `status="draft"` in a commit of its own that changes only the root `status` attribute, touches only `.grace/`, ends with the `Change: <C-ID>` trailer, and names in its body who asked. Make content edits in later commits.
 - Keep `spec.xml` approved and run from `<preflight>` in state `needs-plan-approval`. When the owner wants `spec.xml` changed too, return both in that commit and run from `<preflight>` in state `awaiting-approval`.
