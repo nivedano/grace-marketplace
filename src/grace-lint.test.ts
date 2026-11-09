@@ -999,6 +999,7 @@ describe("committed-scope check in final mode", () => {
       approvalCommit: "2222222bbbb",
       approvalPoints: ["2222222"],
       reapprovalAdded: [{ commit: "3333333", added: ["src/re.ts"] }],
+      reapprovalChangedGates: Array.from({ length: 21 }, (_, index) => ({ commit: `34${String(index).padStart(5, "0")}`, sections: ["DurableScope"] })),
       mutations: [{ commit: "4444444", sections: ["TargetAssertions"] }],
       amendments: [{ commit: "4545454", sections: ["IntentSummary", "ImplementationPlan"] }],
       wideningCommits: [{ commit: "5555555", added: ["src/near.ts", ...far] }],
@@ -1018,6 +1019,9 @@ describe("committed-scope check in final mode", () => {
     expect(text).toContain("B: 1111111aaaa");
     expect(text).toContain("A: 2222222bbbb");
     expect(text).toContain("3333333: src/re.ts");
+    expect(text).toContain("Re-approval gate changes (21):");
+    expect(text).toContain("3400019: DurableScope");
+    expect(text).not.toContain("3400020: DurableScope");
     expect(text).toContain("4444444: TargetAssertions");
     expect(text).toContain("Amendments (1):");
     expect(text).toContain("4545454: IntentSummary, ImplementationPlan");
@@ -1049,6 +1053,17 @@ describe("committed-scope check in final mode", () => {
     expect(formatTextReport(result)).toContain("Skipped: not-git");
   });
 
+  it("text report says why the committed-scope check failed", async () => {
+    const root = committedScopeRepo();
+    writeFileSync(path.join(root, ".git", "HEAD"), "not a ref\n");
+
+    const result = await lintGraceProject(root, { assertionMode: "final", changeId: CHANGE });
+
+    expect(result.committedScope?.failed).toContain("git rev-parse");
+    expect(result.issues.some((issue) => issue.code === "scope.committed-check-failed" && issue.severity === "error")).toBe(true);
+    expect(formatTextReport(result)).toContain("Failed: git rev-parse");
+  });
+
   it("every new scope.* code has a catalog guide", () => {
     const codes = [
       "scope.committed-outside",
@@ -1063,6 +1078,8 @@ describe("committed-scope check in final mode", () => {
       "scope.widened-far",
       "scope.untagged-commit",
       "scope.committed-check-skipped",
+      "scope.reapproval-changed-gates",
+      "scope.committed-check-failed",
     ];
     const prefixTitle = getLintIssueGuide("scope.unknown-code").title;
     for (const code of codes) {
@@ -1086,5 +1103,25 @@ describe("committed-scope check in final mode", () => {
     expect(getLintIssueGuide("scope.approved-plan-amended").explanation).toContain("ImplementationPlan");
     expect(getLintIssueGuide("scope.approved-plan-mutated").explanation).toContain("BaselineAssertions");
     expect(getLintIssueGuide("config.invalid-committed-scope-exempt").explanation).toContain("committedScopeExempt");
+  });
+
+  it("tells the agent that a committed-scope error is fixed in history", () => {
+    for (const code of [
+      "scope.committed-outside",
+      "scope.written-before-widening",
+      "scope.widening-with-code",
+      "scope.written-before-approval",
+      "scope.approved-plan-mutated",
+      "scope.no-owned-commits",
+      "scope.untagged-commit",
+    ]) {
+      const remediation = getLintIssueGuide(code).remediation.join(" ");
+      expect(remediation).toContain("fixed in history");
+      expect(remediation).toContain("rewriting unpublished history and superseding the bundle");
+      expect(remediation).not.toMatch(/\b(Revert|Restore|revert|restore)\b/);
+    }
+    expect(getLintIssueGuide("scope.approval-uncommitted").remediation.join(" ")).toContain(
+      "in or before the first commit that writes outside .grace/",
+    );
   });
 });

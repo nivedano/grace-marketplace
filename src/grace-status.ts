@@ -397,7 +397,7 @@ function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], r
   };
 }
 
-/** The one place the CLI runs git: piped stdout and stderr, never inherited. */
+/** The git entry point of grace status: piped stdout and stderr, never inherited. The committed-scope check has its own. */
 function runGit(cwd: string, args: string[]) {
   return Bun.spawnSync({ cmd: ["git", ...args], cwd, stdout: "pipe", stderr: "pipe" });
 }

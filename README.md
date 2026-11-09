@@ -158,18 +158,23 @@ Lint, status, and projection-backed navigation fail closed: invalid options, inv
 
 ### Lint Configuration
 
-An optional `.grace-lint.json` file at the project root (next to `.grace`) controls how `grace lint` and the query commands collect code files, and how long command-run evidence is kept:
+An optional `.grace-lint.json` file at the project root (next to `.grace`) controls how `grace lint` and the query commands collect code files, how long command-run evidence is kept, and how the committed-scope check treats trailers and bookkeeping files:
 
 ```json
 {
   "ignoredDirs": ["generated", "fixtures-output"],
-  "runLogRetention": 25
+  "runLogRetention": 25,
+  "requireChangeTrailers": true,
+  "committedScopeExempt": [".beads/**"]
 }
 ```
 
 - `ignoredDirs` lists directory names to prune from file collection, on top of the built-in set below. Names match at any depth; globs and paths are not supported.
 - `runLogRetention` is how many *non-passing* `--run-commands` run directories survive pruning, default 10. The newest passing run of every change is protected and never pruned, so evidence an archived change cites stays on disk. `--keepRuns N` overrides the key for a single run; `0` keeps no non-passing runs at all, which removes the current run as soon as it fails or runs without a `--change` to bind it to.
-- The file must be a JSON object with supported keys only. Broken JSON, a non-object shape, an unknown key, a non-array `ignoredDirs`, or a `runLogRetention` that is not a non-negative integer is a `config.*` lint error, and query commands refuse to run until the file is fixed.
+- `requireChangeTrailers` (boolean, default `false`) makes `scope.no-owned-commits` an error instead of a warning: a change whose `ObservedWriteScope` is not `<None />` must own at least one commit through a `Change: C-ID` trailer.
+- `committedScopeExempt` (array of globs in the `ObservedWriteScope` glob grammar, default empty) lists bookkeeping files, such as an issue tracker's state, that the committed-scope check reports under `exempt` and never classifies.
+- `grace lint --path <root> --change C-ID --assertions final` runs the committed-scope check: it reads the change's commits from git, classifies every file they wrote against the approved `ObservedWriteScope` and its widening commits, and adds the result as a `committedScope` section to the text and JSON report. Other assertion modes skip it.
+- The file must be a JSON object with supported keys only. Broken JSON, a non-object shape, an unknown key, a non-array `ignoredDirs`, a `runLogRetention` that is not a non-negative integer, a non-boolean `requireChangeTrailers`, or an invalid `committedScopeExempt` is a `config.*` lint error, and query commands refuse to run until the file is fixed.
 - A directory that cannot be listed (restrictive permissions, sandbox leftovers) is skipped with a `walk.unreadable-directory` warning instead of aborting the run; add its name to `ignoredDirs` to prune it silently. Explain any of these codes with `grace lint --explain <code>`.
 
 Built-in ignored directories:
