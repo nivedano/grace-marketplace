@@ -273,7 +273,8 @@ export function checkCommittedScope(
       hash: entry.commit,
       index,
       scope: entriesToScope(entry.added),
-      writesCode: (window[index]?.files ?? []).some((file) => !isGrace(file)),
+      // Exempt bookkeeping files never count as writes outside .grace/.
+      writesCode: (window[index]?.files ?? []).some((file) => !isGrace(file) && !isExempt(file)),
     };
   });
   const nearFar = new NearFar(history.approvedScope, new PackageRoots(root), rule);

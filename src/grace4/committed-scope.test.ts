@@ -400,6 +400,25 @@ describe("checkCommittedScope", () => {
       expect(report.widenedNear).toEqual([]);
     });
 
+    it("does not count exempt files in a widening commit as writes outside .grace/", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      const widening = widen(root, ["src/a.ts", "src/b.ts"], { ".beads/issues.jsonl": "1\n" });
+      commit(root, { "src/b.ts": "b\n" }, owned("feat: write b"));
+
+      const exempted = check(root, { requireChangeTrailers: false, exempt: [".beads/**"] });
+      expect(exempted.report.errors).toEqual([]);
+      expect(exempted.report.widenedNear).toEqual(["src/b.ts"]);
+      expect(exempted.report.exempt).toEqual([".beads/issues.jsonl"]);
+      expect(exempted.issues).toEqual([]);
+
+      const plain = check(root);
+      expect(plain.report.errors).toEqual([
+        { file: ".beads/issues.jsonl", code: "scope.committed-outside", commit: short(widening) },
+        { file: "src/b.ts", code: "scope.widening-with-code", commit: short(widening) },
+      ]);
+      expect(plain.report.widenedNear).toEqual([]);
+    });
+
     it("errors with scope.written-before-widening for the same commit and for a later widening", () => {
       const { root } = approvedRepo(["src/a.ts"]);
       const same = widen(root, ["src/a.ts", "src/b.ts"], { "src/b.ts": "b\n" });
