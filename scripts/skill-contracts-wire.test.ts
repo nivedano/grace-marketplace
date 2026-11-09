@@ -53,7 +53,8 @@ describe("GRACE wire-contract skill contracts", () => {
     for (const sentence of WIRE_CHANGE_FORMULA) {
       expect(block).toContain(sentence);
     }
-    expect(block).toContain("list every repository it affects in `AffectedAreas`");
+    expect(block).toContain("list this repository's `M-*` modules on the boundary in `AffectedAreas`, and name every other repository it affects in a `<Constraint>`.");
+    expect(block).not.toContain("repository it affects in `AffectedAreas`");
   });
 
   it("keeps copies byte-stable and binds each check to its side", () => {
