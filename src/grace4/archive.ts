@@ -65,6 +65,8 @@ export type ArchiveResult = {
   evidence: ArchiveEvidence;
   /** Committed-scope report for the change; the archive proceeds only when it holds no error. */
   committedScope: CommittedScopeReport;
+  /** Warning-severity issues of the committed-scope check, in the order the check raised them. */
+  committedScopeWarnings: { code: string; message: string }[];
   statusFlips: ArchiveStatusFlip[];
   moveMode: "git" | "filesystem";
   /** True when the rename and the flipped content were staged. The archive never commits. */
@@ -371,24 +373,32 @@ const REFUSAL_ISSUE_CAP = 10;
 
 /**
  * Runs the committed-scope check with the project's lint configuration and refuses on any error-severity
- * issue. Warnings never refuse; their facts stay in the returned report.
+ * issue. Warnings never refuse; they are returned with the report.
  */
-function requireCommittedScope(root: string, changeId: string): CommittedScopeReport {
+function requireCommittedScope(root: string, changeId: string): { report: CommittedScopeReport; warnings: { code: string; message: string }[] } {
   const { config } = loadGraceLintConfig(root);
   const { issues, report } = checkCommittedScope(root, changeId, {
     requireChangeTrailers: config?.requireChangeTrailers ?? false,
     exempt: committedScopeExemptGlobs(config),
   });
   const errors = issues.filter((entry) => entry.severity === "error");
+  if (report.failed) {
+    throw refuse(
+      `The committed-scope check for ${changeId} could not run (scope.committed-check-failed): ${report.failed}. `
+      + "Fix the git error and run grace archive again; nothing was written.",
+    );
+  }
   if (errors.length > 0) {
     const listed = errors.slice(0, REFUSAL_ISSUE_CAP).map((entry) => `${entry.code} ${entry.file}`);
     const more = errors.length > listed.length ? ` and ${errors.length - listed.length} more` : "";
     throw refuse(
       `The committed-scope check for ${changeId} found ${errors.length} error(s): ${listed.join("; ")}${more}. `
-      + "Resolve them in the committed history, then rerun the final gate; nothing was written.",
+      + "They are fixed in history, and no new commit clears them: stop and report them to the user, who chooses "
+      + "between rewriting unpublished history and superseding the bundle. Nothing was written.",
     );
   }
-  return report;
+  const warnings = issues.filter((entry) => entry.severity === "warning").map((entry) => ({ code: entry.code, message: entry.message }));
+  return { report, warnings };
 }
 
 /**
@@ -446,7 +456,7 @@ export async function archiveChange(projectRoot: string, options: ArchiveOptions
   const evidence = requireFinalRunEvidence(root, options, warnings);
   const git = inspectGitContext(root, bundleRelative, destinationRelative, evidence.headVerified, warnings);
   const useGit = git.available && git.tracked;
-  const committedScope = requireCommittedScope(root, options.changeId);
+  const { report: committedScope, warnings: committedScopeWarnings } = requireCommittedScope(root, options.changeId);
 
   for (const artifact of pending) {
     writeFileSync(artifact.file, artifact.flipped);
@@ -500,6 +510,7 @@ export async function archiveChange(projectRoot: string, options: ArchiveOptions
     to: destinationRelative,
     evidence,
     committedScope,
+    committedScopeWarnings,
     statusFlips: pending.map((artifact) => ({ file: `${destinationRelative}/${path.basename(artifact.file)}`, from: APPROVED_STATUS, to: APPLIED_STATUS })),
     moveMode: useGit ? "git" : "filesystem",
     staged: useGit,
@@ -507,22 +518,48 @@ export async function archiveChange(projectRoot: string, options: ArchiveOptions
   };
 }
 
-/** Renders the committed-scope report as the `Committed scope` text section. */
-function formatCommittedScope(report: CommittedScopeReport): string[] {
+/** Cap on the entries of one committed-scope text list, as in the lint report; the rest are counted. */
+const COMMITTED_SCOPE_LIST_CAP = 20;
+
+/** At most 20 entries joined with commas, then a count of the rest. */
+function capInline(entries: string[]): string {
+  const shown = entries.slice(0, COMMITTED_SCOPE_LIST_CAP).join(", ");
+  return entries.length > COMMITTED_SCOPE_LIST_CAP ? `${shown}, … ${entries.length - COMMITTED_SCOPE_LIST_CAP} more` : shown;
+}
+
+/** True when the check classified committed files: it ran, and the change owns at least one commit. */
+function classifiedCommittedFiles(report: CommittedScopeReport): boolean {
+  return !report.skipped && report.ownedCommits > 0;
+}
+
+/**
+ * Renders the committed-scope report as the `Committed scope` text section. When the check was skipped or the
+ * change owns no commit, the file lists are replaced by a statement that nothing was classified and the warning
+ * that explains it, so an empty list is never read as a clean result.
+ */
+function formatCommittedScope(report: CommittedScopeReport, warnings: { code: string; message: string }[]): string[] {
+  const listing = (label: string, entries: string[]) => [`- ${label}: ${entries.length > 0 ? capInline(entries) : "none"}`];
+  const warningLines = warnings.map((warning) => `- Warning ${warning.code}: ${warning.message}`);
   if (report.skipped) {
-    return ["Committed scope", `- Check skipped (${report.skipped}); no committed history was classified.`];
+    return ["Committed scope", `- Check skipped (${report.skipped}); nothing was classified.`, ...warningLines];
   }
-  const listing = (label: string, entries: string[]) => (entries.length > 0 ? [`- ${label}: ${entries.join(", ")}`] : [`- ${label}: none`]);
+  const planHistory = [
+    ...listing("Plan amendments", report.amendments.map((entry) => `${entry.commit} (${entry.sections.join(", ")})`)),
+    ...listing("Re-approval additions", report.reapprovalAdded.flatMap((entry) => entry.added.map((added) => `${added} (${entry.commit})`))),
+    ...listing("Re-approval gate changes", report.reapprovalChangedGates.map((entry) => `${entry.commit} (${entry.sections.join(", ")})`)),
+  ];
+  if (!classifiedCommittedFiles(report)) {
+    return ["Committed scope", "- Owned commits: 0", "- No owned commits; nothing was classified.", ...planHistory, ...warningLines];
+  }
   return [
     "Committed scope",
     `- Owned commits: ${report.ownedCommits}`,
     ...listing("Within approved scope", report.approved),
     ...listing("Widened near", report.widenedNear),
     ...listing("Widened far", report.widenedFar),
-    ...listing("Plan amendments", report.amendments.map((entry) => `${entry.commit} (${entry.sections.join(", ")})`)),
-    ...listing("Re-approval additions", report.reapprovalAdded.flatMap((entry) => entry.added.map((added) => `${added} (${entry.commit})`))),
+    ...planHistory,
     ...listing("Exempt", report.exempt),
-    ...(report.untaggedInScope.length > 0 ? [`- Untagged commits in scope: ${report.untaggedInScope.join(", ")}`] : []),
+    ...(report.untaggedInScope.length > 0 ? [`- Untagged commits in scope: ${capInline(report.untaggedInScope)}`] : []),
   ];
 }
 
@@ -544,7 +581,7 @@ export function formatArchiveText(result: ArchiveResult): string {
     "Status Flips",
     ...result.statusFlips.map((flip) => `- ${flip.file}: ${flip.from} -> ${flip.to}`),
     "",
-    ...formatCommittedScope(result.committedScope),
+    ...formatCommittedScope(result.committedScope, result.committedScopeWarnings),
   ];
   if (result.warnings.length > 0) {
     lines.push("", "Warnings", ...result.warnings.map((warning) => `- ${warning}`));
@@ -553,7 +590,9 @@ export function formatArchiveText(result: ArchiveResult): string {
     "",
     "Next Action",
     "- Review the staged bundle and commit the archive yourself; grace archive never commits.",
-    "- Quote the far list, the amendments and the re-approval additions above in the archive commit body, or state that there are none.",
+    classifiedCommittedFiles(result.committedScope)
+      ? "- Quote the far list, the amendments, the re-approval additions and the re-approval gate changes above in the archive commit body, or state that there are none."
+      : "- State in the archive commit body that nothing was classified and quote the committed-scope warning above; quote the amendments, the re-approval additions and the re-approval gate changes.",
   );
   return lines.join("\n");
 }

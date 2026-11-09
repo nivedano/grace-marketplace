@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "bun:test";
@@ -455,6 +455,9 @@ describe("grace archive committed-scope integration", () => {
       expect(error!.code).toBe("precondition-failed");
       expect(error!.message).toContain(refusal.code);
       expect(error!.message).toContain(refusal.file);
+      expect(error!.message).toContain("fixed in history");
+      expect(error!.message).toContain("rewriting unpublished history and superseding the bundle");
+      expect(error!.message).not.toContain("Resolve them");
       expect(existsSync(archivedBundle(root))).toBe(false);
       expect(readFileSync(path.join(activeBundle(root), "plan.xml"), "utf8")).toBe(planBefore);
       expect(readFileSync(path.join(activeBundle(root), "spec.xml"), "utf8")).toBe(specBefore);
@@ -497,7 +500,13 @@ describe("grace archive committed-scope integration", () => {
     const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot });
 
     expect(result.committedScope.skipped).toBe("not-git");
-    expect(formatArchiveText(result)).toContain("skipped");
+    const text = formatArchiveText(result);
+    const section = text.slice(text.indexOf("Committed scope"), text.indexOf("Next Action"));
+    expect(section).toContain("- Check skipped (not-git); nothing was classified.");
+    expect(section).toContain("scope.committed-check-skipped");
+    expect(section).not.toContain("Widened far");
+    expect(section).not.toContain(": none");
+    expect(result.committedScopeWarnings.map((warning) => warning.code)).toEqual(["scope.committed-check-skipped"]);
   });
 
   it("does not refuse a missing owned commit when requireChangeTrailers is off", async () => {
@@ -509,6 +518,49 @@ describe("grace archive committed-scope integration", () => {
     const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot });
 
     expect(result.committedScope.ownedCommits).toBe(0);
+    const text = formatArchiveText(result);
+    const section = text.slice(text.indexOf("Committed scope"), text.indexOf("Next Action"));
+    expect(section).toContain("- No owned commits; nothing was classified.");
+    expect(section).toContain("scope.no-owned-commits");
+    for (const classified of ["Within approved scope", "Widened near", "Widened far", "Exempt"]) {
+      expect(section).not.toContain(classified);
+    }
+    expect(text.slice(text.indexOf("Next Action"))).toContain("nothing was classified");
+  });
+
+  it("caps each committed-scope text list at 20 entries", async () => {
+    const root = seededProject();
+    approve(root, ["src/a.ts"]);
+    commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+    const logRoot = createLogRoot();
+    cleanRunAtHead(logRoot, root);
+    const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot });
+    result.committedScope.widenedFar = Array.from({ length: 25 }, (_, index) => `src/far-${index}.ts`);
+
+    const text = formatArchiveText(result);
+    expect(text).toContain("src/far-19.ts, … 5 more");
+    expect(text).not.toContain("src/far-20.ts");
+  });
+
+  it("refuses with the git error when the committed-scope check cannot run", async () => {
+    const root = seededProject();
+    const approval = approve(root, ["src/a.ts"]);
+    commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+    const logRoot = createLogRoot();
+    cleanRunAtHead(logRoot, root);
+    const blob = fixtureGit(root, ["rev-parse", `${approval}:${ACTIVE_PLAN}`]);
+    const object = path.join(root, ".git", "objects", blob.slice(0, 2), blob.slice(2));
+    chmodSync(object, 0o666);
+    rmSync(object);
+
+    const error = await archiveChange(root, { changeId: CHANGE_ID, logRoot }).then(() => null, (thrown: unknown) => thrown as Error & { code?: string });
+
+    expect(error).not.toBeNull();
+    expect(error!.code).toBe("precondition-failed");
+    expect(error!.message).toContain("scope.committed-check-failed");
+    expect(error!.message).toContain("git show");
+    expect(error!.message).not.toContain("fixed in history");
+    expect(existsSync(archivedBundle(root))).toBe(false);
   });
 
   it("passes the project's committedScopeExempt globs to the check", async () => {

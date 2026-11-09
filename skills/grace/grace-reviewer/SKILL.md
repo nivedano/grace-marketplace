@@ -9,7 +9,8 @@ description: Review GRACE 4 integrity across .grace artifacts, active changes, s
 - Return each `far` file (`widenedFar`) and each re-approval addition (`reapprovalAdded`) as a finding for the archive commit body: who asked, who agreed, why the plan missed the file, and whether the miss was avoidable.
 - Return each `amendments` entry as a finding for the archive commit body: who asked, who agreed, why the plan changed.
 - Return each `reapprovalChangedGates` entry as a finding for the archive commit body: who asked, who agreed, which gate sections changed, and why no superseding bundle was created.
-- State that there were none when `widenedFar`, `reapprovalAdded`, `amendments` and `reapprovalChangedGates` are empty.
+- State that there were none when `ownedCommits` is above 0, `skipped` is unset, and `widenedFar`, `reapprovalAdded`, `amendments` and `reapprovalChangedGates` are empty.
+- State that nothing was classified when `ownedCommits` is 0 or `skipped` is set, and quote the `scope.no-owned-commits` or `scope.committed-check-skipped` warning.
 </scope_widening_review>
 
 <review_checklist>

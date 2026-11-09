@@ -28,11 +28,19 @@ describe("archive committed-scope skill contracts", () => {
       expect(archive).toContain(ARCHIVE_SENTENCE);
       expect(archive).toContain("`committedScope`");
       expect(archive).toContain("warnings never refuse");
+      expect(archive).toContain("the filesystem rename happens only outside a git worktree or in a shallow clone");
     });
 
     it(`grace-reviewer reads the report from lint or archive output (${root})`, () => {
       const review = slice(read(`${root}/grace-reviewer/SKILL.md`), "<scope_widening_review>", "</scope_widening_review>");
       expect(review).toContain(REVIEWER_SENTENCE);
+      const lines = review.split("\n");
+      const none = lines.find((line) => line.startsWith("- State that there were none"));
+      expect(none).toContain("`ownedCommits` is above 0, `skipped` is unset");
+      const nothing = lines.find((line) => line.startsWith("- State that nothing was classified"));
+      expect(nothing).toContain("`ownedCommits` is 0 or `skipped` is set");
+      expect(nothing).toContain("`scope.no-owned-commits`");
+      expect(nothing).toContain("`scope.committed-check-skipped`");
     });
   }
 
@@ -44,7 +52,9 @@ describe("archive committed-scope skill contracts", () => {
 
   it("keeps the archive step in grace-execute while the amended scope rule stays whole", () => {
     const rules = slice(read("skills/grace/grace-execute/SKILL.md"), "<execution_rules>", "</execution_rules>");
-    expect(rules).toContain("7. Only then archive the complete bundle with `grace archive --path PROJECT --change C-ID`, which sets spec and plan to `applied`.");
-    expect(rules).toContain("\n8. Never edit approved assertions or `DurableScope` in place");
+    const items = rules.split(/\n(?=\d+\. )/).filter((item) => /^\d+\. /.test(item));
+    const archiveIndex = items.findIndex((item) => item.includes("Only then archive the complete bundle with `grace archive --path PROJECT --change C-ID`, which sets spec and plan to `applied`."));
+    expect(archiveIndex).toBeGreaterThanOrEqual(0);
+    expect(items[archiveIndex + 1]).toMatch(/^\d+\. Never edit approved assertions or `DurableScope` in place/);
   });
 });
