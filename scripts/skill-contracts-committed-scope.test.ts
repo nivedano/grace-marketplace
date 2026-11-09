@@ -105,7 +105,7 @@ describe("committed-scope skill contracts", () => {
     expect(commitBlock).toContain("same final paragraph as `Co-Authored-By`");
     expect(commitBlock).toContain("grace status");
     expect(commitBlock).toContain(
-      "Commit the approved `plan.xml` in or before the first commit that writes outside `.grace/`.",
+      "Commit the approved `plan.xml` before the first commit that writes outside `.grace/`.",
     );
     expect(commitBlock).toContain("stop and report unexplained files");
     expect(commitBlock).not.toContain("resolve unexplained files");

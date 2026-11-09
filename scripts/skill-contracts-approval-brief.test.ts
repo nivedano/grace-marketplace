@@ -450,3 +450,97 @@ describe("draft pair: design-context template", () => {
     }
   });
 });
+
+/** The re-approval window stated verbatim in grace-execute, grace-plan and the explainer. */
+const REAPPROVAL_WINDOW =
+  "through a superseding bundle, or through a re-approval before the first commit that writes outside `.grace/`; never in place";
+const WINDOW_FILES = [
+  "skills/grace/grace-execute/SKILL.md",
+  "skills/grace/grace-plan/SKILL.md",
+  "skills/grace/grace-explainer/references/contract-driven-dev.md",
+];
+
+/** Lines of text that contain marker; fails when there is none. */
+function linesWith(text: string, marker: string): string[] {
+  const lines = text.split("\n").filter((line) => line.includes(marker));
+  expect(lines.length).toBeGreaterThan(0);
+  return lines;
+}
+
+describe("approval and the re-approval window: grace-execute", () => {
+  const skill = read("skills/grace/grace-execute/SKILL.md");
+
+  it("keeps the approval apart from the order to execute", () => {
+    expect(block(skill, "preflight")).toContain(
+      "Start only on an explicit owner order to execute: approval of the pair and the order to execute are two separate owner statements, and an approval is not that order unless its message says to execute.",
+    );
+  });
+
+  it("commits the approved plan before the first commit that writes outside .grace/", () => {
+    const commit = block(skill, "commit_contract");
+    expect(commit).toContain("Commit the approved `plan.xml` before the first commit that writes outside `.grace/`.");
+    expect(commit).not.toContain("in or before");
+  });
+
+  it("opens the re-approval window on the gate-section line", () => {
+    const [gates] = linesWith(block(skill, "scope_widening"), "superseding bundle");
+    expect(gates).toContain(`Change \`BaselineAssertions\`, \`TargetAssertions\` and \`DurableScope\` ${REAPPROVAL_WINDOW}.`);
+    expect(gates).toContain("Re-approve through `$grace-brief`.");
+  });
+});
+
+describe("approval and the re-approval window: grace-plan and the explainer", () => {
+  it("states the window once, verbatim, in each gate-section text", () => {
+    for (const file of WINDOW_FILES) {
+      expect(read(file).split(REAPPROVAL_WINDOW)).toHaveLength(2);
+    }
+  });
+
+  it("opens the window in grace-plan approved_plan_immutability and keeps the supersede procedure", () => {
+    const immutability = block(read("skills/grace/grace-plan/SKILL.md"), "approved_plan_immutability");
+    expectAll(immutability, [
+      REAPPROVAL_WINDOW,
+      "Return `plan.xml` to draft for a re-approval only through `$grace-brief`",
+      "Create a new `C-*` bundle",
+      "mark the old bundle superseded",
+    ]);
+  });
+
+  it("opens the window in the explainer paragraph without naming verification gates", () => {
+    const explainer = read("skills/grace/grace-explainer/references/contract-driven-dev.md");
+    const from = explainer.indexOf("Approved plans are immutable");
+    expect(from).toBeGreaterThanOrEqual(0);
+    const paragraph = explainer.slice(from, explainer.indexOf("\n\n", from));
+    expectAll(paragraph, [
+      `If baseline/target assertions or \`DurableScope\` need to change after approval, change them ${REAPPROVAL_WINDOW}.`,
+      "`$grace-brief`",
+    ]);
+    expect(paragraph).not.toContain("verification gates");
+  });
+});
+
+describe("approval and the re-approval window: grace-reviewer", () => {
+  const review = block(read("skills/grace/grace-reviewer/SKILL.md"), "scope_widening_review");
+
+  it("cites the approval record for each gate change and asks about supersede only without one", () => {
+    const [gates] = linesWith(review, "Return each `reapprovalChangedGates` entry");
+    expect(gates).toContain("the re-approval's approval record in the body of the entry's `commit`, cited");
+    const withoutRecord = gates.indexOf("when that body holds no approval record");
+    expect(withoutRecord).toBeGreaterThan(0);
+    expect(gates.indexOf("why no superseding bundle was created")).toBeGreaterThan(withoutRecord);
+  });
+
+  it("returns a re-approval after a code write as a finding", () => {
+    const [after] = linesWith(review, "`scope.reapproval-after-write`");
+    expect(after).toContain("Return each `scope.reapproval-after-write` error as a finding");
+  });
+});
+
+describe("approval and the re-approval window: mirrors", () => {
+  it("mirrors the edited files byte-for-byte", () => {
+    for (const file of [...WINDOW_FILES, "skills/grace/grace-reviewer/SKILL.md"]) {
+      const packaged = path.join(repoRoot, "plugins/grace", file);
+      expect(readFileSync(packaged).equals(readFileSync(path.join(repoRoot, file)))).toBe(true);
+    }
+  });
+});
