@@ -1,12 +1,13 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 
 import { collectCodeFiles } from "../project-utils";
 import { resolveGrace4Paths } from "./project";
 import { buildGraphProjection, buildVerificationProjection } from "./projections";
 import { collectScenarioEvidence } from "./scenario-evidence";
+import * as scenarioIds from "./scenario-ids";
 import { writeMinimalGrace4Project } from "./test-fixtures";
 
 function createProject() {
@@ -185,5 +186,24 @@ describe("scenario evidence", () => {
 
     const dangling = scan(root).issues.filter((issue) => issue.code === "verification.scenario-dangling-reference");
     expect(dangling.map((issue) => issue.message)).toEqual(["SC-OTHER-006 names V-M-OTHER, which has no scenario with that id."]);
+  });
+
+  it("reads a file without SC- safely and scans no line of it", () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeVerification(root, `<Scenario><SC-EXAMPLE-001 />Proven by a test.</Scenario><Scenario><SC-EXAMPLE-002 />Nothing proves it.</Scenario>`);
+    writeProjectFile(root, "src/example.test.ts", `test("SC-EXAMPLE-001 proves it", () => {});\n`);
+    writeProjectFile(root, "src/plain.ts", "export const plain = 1;\nexport const other = 2;\n");
+
+    const tokens = spyOn(scenarioIds, "findScenarioTokens");
+    try {
+      const result = scan(root);
+      expect(result.issues).toEqual([]);
+      expect(stateOf(result, "SC-EXAMPLE-001")).toBe("executable");
+      expect(stateOf(result, "SC-EXAMPLE-002")).toBe("unproven");
+      expect(tokens.mock.calls.map(([line]) => line)).not.toContain("export const plain = 1;");
+    } finally {
+      tokens.mockRestore();
+    }
   });
 });

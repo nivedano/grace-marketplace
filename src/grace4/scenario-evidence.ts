@@ -88,6 +88,8 @@ function scanReferences(verification: VerificationProjection, files: string[], i
     } catch {
       continue;
     }
+    // Every token starts with "SC-", so a file without it has nothing to split or scan.
+    if (!text.includes("SC-")) continue;
     const reported = new Set<string>();
     text.split("\n").forEach((line, index) => {
       for (const token of findScenarioTokens(line)) {
