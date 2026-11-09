@@ -34,7 +34,8 @@ Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a 
 - End every commit made for a change with one trailer paragraph that holds `Change: <C-ID>`, once per change the commit serves.
 - Put `Change: <C-ID>` in the same final paragraph as `Co-Authored-By` and any other trailers, with no blank line and no prose between them.
 - Treat a `Change:` line anywhere else as prose; it is not a trailer.
-- Run `grace status` before each commit and resolve unexplained files first.
+- Commit the approved `plan.xml` in or before the first commit that writes outside `.grace/`.
+- Run `grace status` before each commit; stop and report unexplained files.
 </commit_contract>
 
 <recovery_decision_table>

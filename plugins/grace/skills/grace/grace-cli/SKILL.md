@@ -26,22 +26,22 @@ Lint, status, and navigation commands validate before returning records. JSON ar
 </failure_contract>
 
 <committed_scope_contract>
-`--change C-ID --assertions final` also runs the committed-scope check and adds a `committedScope` section to the text and JSON report. The check classifies each commit made since the plan's first commit against the `ObservedWriteScope` of the approved plan. Other assertion modes skip it.
+`--change C-ID --assertions final` also runs the committed-scope check and adds a `committedScope` section to the text and JSON report. The check classifies each commit from the bundle's first commit that contains `spec.xml` or `plan.xml` against the `ObservedWriteScope` of the approved plan. Other assertion modes skip it.
 Errors:
 - `scope.committed-outside`: a commit carrying the change's `Change` trailer wrote a file outside the final `ObservedWriteScope`.
 - `scope.widening-with-code`: a widening commit that admitted a file also wrote outside `.grace/`.
 - `scope.written-before-widening`: a file was written in the commit that admitted it, or before it.
 - `scope.written-before-approval`: a commit carrying the change's `Change` trailer wrote a file before the plan was approved.
 - `scope.approved-plan-mutated`: an approved plan changed outside `ObservedWriteScope` without a re-approval.
-- `scope.approval-uncommitted`: no commit holds the plan as `approved`; commit the approval first.
+- `scope.approval-uncommitted`: no commit has `plan.xml` committed as `approved`; commit the approved `plan.xml`. Writes committed before it are reported as `scope.written-before-approval`.
 - `scope.no-owned-commits`: the scope is not `<None />` and no commit carries the `Change: <C-ID>` trailer; an error when `requireChangeTrailers` is `true`, otherwise a warning.
 Warnings:
 - `scope.reapproval-widened`: a re-approval added `ObservedWriteScope` entries.
 - `scope.widened-far`: an admitted file lies outside the directories and packages of the approved scope.
-- `scope.untagged-commit`: a commit without a `Change` trailer touched a file in the final scope.
+- `scope.untagged-commit`: a commit without an effective `Change` trailer touched a file in the final scope; a merge commit, or a trailer naming no active bundle, counts as untagged.
 - `scope.committed-check-skipped`: the project is not a git worktree, or the clone is shallow.
 Set `requireChangeTrailers` (boolean) in `.grace-lint.json`; it defaults to `false`.
-`grace status` derives `approved-scope-widening-pending` for an uncommitted `ObservedWriteScope`-only widening of an approved plan. Commit the widening alone, touching nothing outside `.grace/`, before writing the admitted files.
+`grace status` derives `approved-scope-widening-pending` for an uncommitted `ObservedWriteScope`-only widening of an approved plan. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Write the admitted files only after that commit.
 </committed_scope_contract>
 
 <runtime_contract>

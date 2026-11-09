@@ -85,6 +85,12 @@ describe("committed-scope skill contracts", () => {
     expect(commitBlock).toContain("`Change: <C-ID>`");
     expect(commitBlock).toContain("same final paragraph as `Co-Authored-By`");
     expect(commitBlock).toContain("grace status");
+    expect(commitBlock).toContain(
+      "Commit the approved `plan.xml` in or before the first commit that writes outside `.grace/`.",
+    );
+    expect(commitBlock).toContain("stop and report unexplained files");
+    expect(commitBlock).not.toContain("resolve unexplained files");
+    expect(wideningBlock).toContain("only after that commit");
 
     expect(execute).not.toContain("scope_discipline");
   });
@@ -97,7 +103,9 @@ describe("committed-scope skill contracts", () => {
     expect(block).toContain("committedScope");
     expect(block).toContain("far");
     expect(block).toContain("ObservedWriteScope");
-    expect(block).toContain("archive record");
+    expect(block).toContain("archive commit body");
+    expect(block).not.toContain("archive record");
+    expect(block).not.toContain("verdict");
     expect(reviewer.indexOf("<scope_widening_review>")).toBeLessThan(reviewer.indexOf("<review_checklist>"));
   });
 
@@ -109,6 +117,14 @@ describe("committed-scope skill contracts", () => {
     expect(block).toContain("committedScope");
     expect(block).toContain("requireChangeTrailers");
     expect(block).toContain("approved-scope-widening-pending");
+    expect(block).toContain(WIDENING_FORMULA);
+    expect(block).toContain("Write the admitted files only after that commit.");
+    expect(block).toContain("committed as `approved`");
+    expect(block).toContain("scope.written-before-approval");
+    expect(block).toContain("first commit that contains `spec.xml` or `plan.xml`");
+    expect(block).toContain("without an effective `Change` trailer");
+    expect(block).toContain("merge commit");
+    expect(block).not.toContain("since the plan's first commit");
     for (const code of [
       "scope.committed-outside",
       "scope.widening-with-code",
