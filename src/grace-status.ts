@@ -522,13 +522,14 @@ function differsFromHeadOnlyInStatus(root: string, relativePath: string): boolea
 
 /**
  * Finds the active bundles at an uncommitted moment of the approval cycle, read against HEAD. Without a HEAD there is
- * none. A bundle with an artifact untracked in HEAD is never at a moment, so a flip beside a never-committed plan.xml
- * stays approved-contract-drift.
- * - `approval-pending-commit`: plan.xml went draft to approved, and spec.xml is approved in HEAD and unchanged, or went
- *   draft to approved with it.
+ * none. An approval or a return needs spec.xml and plan.xml both tracked in HEAD, so a flip beside a never-committed
+ * plan.xml stays approved-contract-drift; a half approval needs only spec.xml tracked in HEAD.
+ * - `approval-pending-commit`: plan.xml went draft to approved differing from HEAD only in its status, and spec.xml is
+ *   approved in HEAD and unchanged, or went draft to approved with it differing only in its status. A flip that also
+ *   edits content is not a moment: the edit was never audited.
  * - `return-pending-commit`: plan.xml is approved in HEAD and draft in the tree, differing only in its status, and
  *   spec.xml is approved in HEAD and unchanged, or returns beside it differing only in its status.
- * - `half-approval`: spec.xml went draft to approved while plan.xml is draft.
+ * - `half-approval`: spec.xml went draft to approved while plan.xml is draft in the tree and not approved in HEAD.
  */
 function collectApprovalMoments(root: string, bundles: ChangeBundleStatus[], trackedChangedFiles: ReadonlySet<string>, headExists: boolean): Map<string, ApprovalMoment> {
   const moments = new Map<string, ApprovalMoment>();
@@ -542,10 +543,11 @@ function collectApprovalMoments(root: string, bundles: ChangeBundleStatus[], tra
     const planHead = readHeadStatus(root, planPath, true);
     const specUnchangedApproved = bundle.specStatus === "approved" && specHead === "approved" && !trackedChangedFiles.has(specPath);
 
-    if (bundle.specStatus === "approved" && bundle.planStatus === "draft" && specHead === "draft") {
+    if (bundle.specStatus === "approved" && bundle.planStatus === "draft" && specHead === "draft" && planHead !== "approved") {
       moments.set(bundle.changeId, "half-approval");
-    } else if (bundle.planStatus === "approved" && planHead === "draft" && ((bundle.specStatus === "approved" && specHead === "draft") || specUnchangedApproved)) {
-      moments.set(bundle.changeId, "approval-pending-commit");
+    } else if (bundle.planStatus === "approved" && planHead === "draft" && differsFromHeadOnlyInStatus(root, planPath)) {
+      const specApproves = bundle.specStatus === "approved" && specHead === "draft" && differsFromHeadOnlyInStatus(root, specPath);
+      if (specApproves || specUnchangedApproved) moments.set(bundle.changeId, "approval-pending-commit");
     } else if (bundle.planStatus === "draft" && planHead === "approved" && differsFromHeadOnlyInStatus(root, planPath)) {
       const specReturns = bundle.specStatus === "draft" && specHead === "approved" && differsFromHeadOnlyInStatus(root, specPath);
       if (specReturns || specUnchangedApproved) moments.set(bundle.changeId, "return-pending-commit");

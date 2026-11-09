@@ -1224,6 +1224,16 @@ describe("draft baseline", () => {
     expect(codes(await lintGraceProject(half, { assertionMode: "baseline", changeId: "C-PLAIN-AD" }))).toContain("assertion.change-not-approved");
   });
 
+  it("states the draft acceptance rule in change-not-approved under --draft", async () => {
+    const draftRule = "or, with --draft, a draft plan.xml beside a draft or approved spec.xml";
+    const notApproved = (result: Awaited<ReturnType<typeof lintGraceProject>>) =>
+      result.issues.find((issue) => issue.code === "assertion.change-not-approved")!.message;
+    // An approved plan beside a draft spec is refused under --draft as well.
+    const root = draftProject("C-MSG", HOLDS, "approved", "draft");
+    expect(notApproved(await lintGraceProject(root, { assertionMode: "baseline", changeId: "C-MSG", draft: true }))).toContain(draftRule);
+    expect(notApproved(await lintGraceProject(root, { assertionMode: "baseline", changeId: "C-MSG" }))).not.toContain("--draft");
+  });
+
   it("still refuses a draft in target and final", async () => {
     const root = draftProject("C-TF", HOLDS, "draft", "draft");
     for (const assertionMode of ["target", "final"] as const) {

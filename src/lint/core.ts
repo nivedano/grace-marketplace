@@ -356,7 +356,7 @@ function resolveSelectedApprovedPlan(
       severity: "error",
       code: "assertion.change-not-approved",
       file: bundleDir,
-      message: `Selected change ${changeId} must name one active bundle whose spec.xml and plan.xml are both approved and identity-matched.`,
+      message: `Selected change ${changeId} must name one active bundle whose spec.xml and plan.xml are both approved and identity-matched${allowDraftPlan ? ", or, with --draft, a draft plan.xml beside a draft or approved spec.xml" : ""}.`,
     });
     return null;
   }

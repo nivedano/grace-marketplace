@@ -921,6 +921,64 @@ describe("grace status", () => {
       expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-EDITSPEC")}/spec.xml`);
     });
 
+    it("pair flip with a plan content edit is not approval-pending-commit", async () => {
+      const root = draftPairRepo("C-FLIPEDIT");
+      flip(root, "C-FLIPEDIT", "spec.xml", "draft", "approved");
+      flip(root, "C-FLIPEDIT", "plan.xml", "draft", "approved");
+      editFile(root, `${bundleOf("C-FLIPEDIT")}/plan.xml`, "<IntentSummary>Apply the change.</IntentSummary>", "<IntentSummary>Edited after the audit.</IntentSummary>");
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-FLIPEDIT");
+      expect(states).not.toContain("approval-pending-commit");
+      expect(states).not.toContain("ready-to-execute");
+      expect(states).toContain("approved-contract-drift");
+      expect(result.nextAction.startsWith("Hard stop")).toBe(true);
+      expect(result.nextAction).not.toContain("commit the approval");
+      expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-FLIPEDIT")}/plan.xml`);
+    });
+
+    it("pair flip with a spec content edit is not approval-pending-commit", async () => {
+      const root = draftPairRepo("C-FLIPSPEC");
+      flip(root, "C-FLIPSPEC", "spec.xml", "draft", "approved");
+      flip(root, "C-FLIPSPEC", "plan.xml", "draft", "approved");
+      editFile(root, `${bundleOf("C-FLIPSPEC")}/spec.xml`, "<Summary>Change.</Summary>", "<Summary>Edited after the audit.</Summary>");
+
+      const result = await collectProjectStatus(root);
+      expect(statesOf(result, "C-FLIPSPEC")).not.toContain("approval-pending-commit");
+      expect(result.nextAction).not.toContain("commit the approval");
+      expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-FLIPSPEC")}/spec.xml`);
+    });
+
+    it("plan-only flip with a plan content edit is not approval-pending-commit", async () => {
+      const root = approvedPairRepo("C-PLANEDIT");
+      flip(root, "C-PLANEDIT", "plan.xml", "approved", "draft");
+      commitAll(root, "test: return to draft");
+      flip(root, "C-PLANEDIT", "plan.xml", "draft", "approved");
+      editFile(root, `${bundleOf("C-PLANEDIT")}/plan.xml`, "<IntentSummary>Apply the change.</IntentSummary>", "<IntentSummary>Edited after the audit.</IntentSummary>");
+
+      const result = await collectProjectStatus(root);
+      expect(statesOf(result, "C-PLANEDIT")).not.toContain("approval-pending-commit");
+      expect(result.nextAction).not.toContain("commit the approval");
+      expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-PLANEDIT")}/plan.xml`);
+    });
+
+    it("keeps the hard stop for a spec flip beside a plan approved in HEAD and edited", async () => {
+      const root = createProject();
+      writeMinimalGrace4Project(root);
+      writeChange(root, "C-HALFHEAD", { specStatus: "draft", planStatus: "approved" });
+      initGit(root);
+      commitAll(root, "test: draft spec beside approved plan");
+      flip(root, "C-HALFHEAD", "spec.xml", "draft", "approved");
+      flip(root, "C-HALFHEAD", "plan.xml", "approved", "draft");
+      editFile(root, `${bundleOf("C-HALFHEAD")}/plan.xml`, "<IntentSummary>Apply the change.</IntentSummary>", "<IntentSummary>Edited.</IntentSummary>");
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-HALFHEAD");
+      expect(states).not.toContain("half-approval");
+      expect(states).toContain("approved-contract-drift");
+      expect(result.nextAction.startsWith("Hard stop")).toBe(true);
+    });
+
     it("pending approval does not explain code in its ObservedWriteScope", async () => {
       const root = draftPairRepo("C-CODE");
       flip(root, "C-CODE", "spec.xml", "draft", "approved");
