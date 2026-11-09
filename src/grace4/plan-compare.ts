@@ -69,6 +69,17 @@ export function comparePlansIgnoringObservedScope(left: GraceXmlNode, right: Gra
   return { equal: sections.length === 0, sections };
 }
 
+/** Plan sections that an approved plan may amend in place; every other section is a gate. */
+export const AMENDABLE_PLAN_SECTIONS: readonly string[] = ["ImplementationPlan", "IntentSummary"];
+
+/**
+ * Returns true when a non-empty list of differing sections names only amendable sections. Any other section,
+ * including "root", "wrapper", "unparseable" and unknown tags, makes the difference a mutation.
+ */
+export function isPlanAmendment(sections: readonly string[]): boolean {
+  return sections.length > 0 && sections.every((section) => AMENDABLE_PLAN_SECTIONS.includes(section));
+}
+
 /** Returns true when every file and every glob of narrower appears in wider by exact normalized string equality. */
 export function scopeIsSuperset(wider: ObservedWriteScope, narrower: ObservedWriteScope): boolean {
   const files = new Set(wider.files);

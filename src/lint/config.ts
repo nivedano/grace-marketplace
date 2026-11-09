@@ -2,10 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { RUN_RETENTION } from "../grace4/run-log-store";
+import { parseScopeGlob } from "../grace4/scope";
 import type { GraceLintConfig, LintIssue } from "./types";
 
 const CONFIG_FILE_NAME = ".grace-lint.json";
-const SUPPORTED_KEYS = new Set(["ignoredDirs", "runLogRetention", "requireChangeTrailers"]);
+const SUPPORTED_KEYS = new Set(["ignoredDirs", "runLogRetention", "requireChangeTrailers", "committedScopeExempt"]);
 
 export function loadGraceLintConfig(projectRoot: string): { config: GraceLintConfig | null; issues: LintIssue[] } {
   const configPath = path.join(projectRoot, CONFIG_FILE_NAME);
@@ -36,7 +37,7 @@ export function loadGraceLintConfig(projectRoot: string): { config: GraceLintCon
         severity: "error",
         code: "config.unknown-key",
         file: CONFIG_FILE_NAME,
-        message: `Unsupported key \`${key}\` in ${CONFIG_FILE_NAME}. Supported keys: ignoredDirs, runLogRetention, requireChangeTrailers.`,
+        message: `Unsupported key \`${key}\` in ${CONFIG_FILE_NAME}. Supported keys: ignoredDirs, runLogRetention, requireChangeTrailers, committedScopeExempt.`,
       });
     }
 
@@ -64,6 +65,15 @@ export function loadGraceLintConfig(projectRoot: string): { config: GraceLintCon
         code: "config.invalid-require-change-trailers",
         file: CONFIG_FILE_NAME,
         message: `\`requireChangeTrailers\` in ${CONFIG_FILE_NAME} must be a boolean.`,
+      });
+    }
+
+    for (const problem of committedScopeExemptProblems(parsed.committedScopeExempt)) {
+      issues.push({
+        severity: "error",
+        code: "config.invalid-committed-scope-exempt",
+        file: CONFIG_FILE_NAME,
+        message: `\`committedScopeExempt\` in ${CONFIG_FILE_NAME} must be an array of ObservedWriteScope globs: ${problem}`,
       });
     }
 
@@ -95,6 +105,36 @@ export function resolveRunLogRetention(override: number | undefined, config: Gra
   }
   const configured = config?.runLogRetention;
   return isRetentionCount(configured) ? configured : RUN_RETENTION;
+}
+
+/**
+ * Returns the configured committedScopeExempt globs, or an empty list when the value is absent or invalid. An
+ * invalid value is reported as `config.invalid-committed-scope-exempt` by loadGraceLintConfig.
+ */
+export function committedScopeExemptGlobs(config: GraceLintConfig | null): string[] {
+  const configured = config?.committedScopeExempt;
+  return Array.isArray(configured) && committedScopeExemptProblems(configured).length === 0 ? [...configured] : [];
+}
+
+/** One message per problem: a value that is not an array, or an entry that is not a valid scope glob. */
+function committedScopeExemptProblems(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    return ["the value is not an array."];
+  }
+  return value.flatMap((entry: unknown) => {
+    if (typeof entry !== "string") {
+      return [`${JSON.stringify(entry)} is not a string.`];
+    }
+    try {
+      parseScopeGlob(entry);
+      return [];
+    } catch (error) {
+      return [error instanceof Error ? error.message : String(error)];
+    }
+  });
 }
 
 function isRetentionCount(value: unknown): value is number {

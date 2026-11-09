@@ -41,13 +41,14 @@ export function commit(root: string, files: Record<string, string | null>, messa
 
 /**
  * Returns GraceChangePlan XML. Scope entries containing a glob metacharacter become Glob, others File; an empty
- * scope becomes None. extra replaces the TargetAssertions body, the ImplementationPlan body or the DurableScope body.
+ * scope becomes None. extra replaces the IntentSummary text or the BaselineAssertions, TargetAssertions,
+ * ImplementationPlan or DurableScope body.
  */
 export function plan(
   changeId: string,
   status: string,
   scope: string[],
-  extra: { tasks?: string; target?: string; durable?: string } = {},
+  extra: { tasks?: string; target?: string; durable?: string; intent?: string; baseline?: string } = {},
 ): string {
   const observed = scope.length === 0
     ? "<None />"
@@ -56,10 +57,12 @@ export function plan(
   const tasks = extra.tasks
     ?? "<T-001><Title>Apply fixture change</Title><DependsOn></DependsOn><AcceptanceCriteria><Criterion>The fixture remains valid.</Criterion></AcceptanceCriteria><Verification><Command>bun test</Command></Verification></T-001>";
   const durable = extra.durable ?? "<GraphAnchors><M-EXAMPLE /></GraphAnchors>";
+  const intent = extra.intent ?? "Apply the fixture change.";
+  const baseline = extra.baseline ?? "<MustExist><Value>M-EXAMPLE</Value></MustExist>";
   return `<GraceChangePlan graceVersion="4.0" status="${status}">
   <${changeId}>
-    <IntentSummary>Apply the fixture change.</IntentSummary>
-    <BaselineAssertions><MustExist><Value>M-EXAMPLE</Value></MustExist></BaselineAssertions>
+    <IntentSummary>${intent}</IntentSummary>
+    <BaselineAssertions>${baseline}</BaselineAssertions>
     <TargetAssertions>${target}</TargetAssertions>
     <DurableScope>${durable}</DurableScope>
     <ObservedWriteScope>

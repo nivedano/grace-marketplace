@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { comparePlansIgnoringObservedScope, scopeIsSuperset } from "./plan-compare";
+import { comparePlansIgnoringObservedScope, isPlanAmendment, scopeIsSuperset } from "./plan-compare";
 import { parseGraceXmlArtifact, type GraceXmlNode } from "./xml";
 
 function parse(xml: string): GraceXmlNode {
@@ -147,5 +147,17 @@ describe("scopeIsSuperset", () => {
 
   it("uses exact string equality for globs, not containment", () => {
     expect(scopeIsSuperset({ files: [], globs: ["src/**"] }, { files: [], globs: ["src/a/**"] })).toBe(false);
+  });
+});
+
+describe("isPlanAmendment", () => {
+  it("accepts only ImplementationPlan and IntentSummary differences", () => {
+    expect(isPlanAmendment(["ImplementationPlan"])).toBe(true);
+    expect(isPlanAmendment(["IntentSummary", "ImplementationPlan"])).toBe(true);
+    expect(isPlanAmendment([])).toBe(false);
+    for (const gate of ["BaselineAssertions", "TargetAssertions", "DurableScope", "root", "wrapper", "unparseable", "Notes"]) {
+      expect(isPlanAmendment([gate])).toBe(false);
+      expect(isPlanAmendment(["ImplementationPlan", gate])).toBe(false);
+    }
   });
 });

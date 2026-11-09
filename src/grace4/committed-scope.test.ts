@@ -154,7 +154,7 @@ describe("readPlanHistory", () => {
     expect(result.finalScope).toEqual({ files: ["src/a.ts"], globs: [] });
   });
 
-  it("records TargetAssertions, task and DurableScope edits between approved versions as mutations", () => {
+  it("records TargetAssertions and DurableScope edits as mutations and a task edit as an amendment", () => {
     const root = seeded();
     commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"]) }, "docs: approve");
     const target = "<MustVerify><Module>M-OTHER</Module></MustVerify>";
@@ -167,9 +167,9 @@ describe("readPlanHistory", () => {
     const result = history(root);
     expect(result.mutations).toEqual([
       { commit: targetEdit, sections: ["TargetAssertions"] },
-      { commit: taskEdit, sections: ["ImplementationPlan"] },
       { commit: durableEdit, sections: ["DurableScope"] },
     ]);
+    expect(result.amendments).toEqual([{ commit: taskEdit, sections: ["ImplementationPlan"] }]);
     expect(result.approvalPoints).toHaveLength(1);
   });
 
@@ -437,16 +437,115 @@ describe("checkCommittedScope", () => {
       const { root } = approvedRepo(["src/a.ts"]);
       const target = "<MustVerify><Module>M-OTHER</Module></MustVerify>";
       const first = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { target }) }, owned("docs: edit target"));
-      const second = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { target, tasks: "<T-001><Title>New</Title></T-001>" }) }, owned("docs: edit tasks"));
+      const durable = "<GraphAnchors><M-OTHER /></GraphAnchors>";
+      const second = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { target, durable }) }, owned("docs: edit durable"));
 
       const { issues, report } = check(root);
       expect(report.mutations).toEqual([
         { commit: short(first), sections: ["TargetAssertions"] },
-        { commit: short(second), sections: ["ImplementationPlan"] },
+        { commit: short(second), sections: ["DurableScope"] },
       ]);
       expect(codes(issues)).toEqual([`error:scope.approved-plan-mutated:${ACTIVE_PLAN}`, `error:scope.approved-plan-mutated:${ACTIVE_PLAN}`]);
       expect(issues[0]!.message).toContain(short(first));
-      expect(issues[1]!.message).toContain("ImplementationPlan");
+      expect(issues[1]!.message).toContain("DurableScope");
+    });
+
+    it("classifies an ImplementationPlan-only or IntentSummary-only edit as scope.approved-plan-amended", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      const tasks = "<T-001><Title>Amended task</Title></T-001>";
+      const intent = "Apply the amended fixture change.";
+      const taskEdit = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { tasks }) }, owned("docs: amend tasks"));
+      const intentEdit = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { tasks, intent }) }, owned("docs: amend intent"));
+      const bothEdit = commit(
+        root,
+        { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts", "src/b.ts"], { tasks: "<T-002><Title>Second</Title></T-002>", intent: "Again." }) },
+        owned("docs: widen and amend both"),
+      );
+      commit(root, { "src/b.ts": "b\n" }, owned("feat: write b"));
+
+      const { issues, report } = check(root);
+      expect(report.mutations).toEqual([]);
+      expect(report.amendments).toEqual([
+        { commit: short(taskEdit), sections: ["ImplementationPlan"] },
+        { commit: short(intentEdit), sections: ["IntentSummary"] },
+        { commit: short(bothEdit), sections: ["IntentSummary", "ImplementationPlan"] },
+      ]);
+      expect(report.wideningCommits).toEqual([{ commit: short(bothEdit), added: ["src/b.ts"] }]);
+      expect(report.widenedNear).toEqual(["src/b.ts"]);
+      expect(codes(issues)).toEqual([
+        `warning:scope.approved-plan-amended:${ACTIVE_PLAN}`,
+        `warning:scope.approved-plan-amended:${ACTIVE_PLAN}`,
+        `warning:scope.approved-plan-amended:${ACTIVE_PLAN}`,
+      ]);
+      expect(issues[0]!.message).toContain(short(taskEdit));
+      expect(issues[0]!.message).toContain("ImplementationPlan");
+      expect(issues[1]!.message).toContain("IntentSummary");
+    });
+
+    it("keeps BaselineAssertions, TargetAssertions, DurableScope, root, wrapper and unparseable differences as scope.approved-plan-mutated", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      const baseline = "<MustExist><Value>M-OTHER</Value></MustExist>";
+      const target = "<MustVerify><Module>M-OTHER</Module></MustVerify>";
+      const durable = "<GraphAnchors><M-OTHER /></GraphAnchors>";
+      const gates = plan(ID, "approved", ["src/a.ts"], { baseline, target, durable });
+      const rooted = gates.replace(`status="approved">`, `status="approved" note="edited">`);
+      const wrapped = rooted.replace(`<${ID}>`, `<${ID} note="edited">`);
+      const unknown = wrapped.replace("<ImplementationPlan>", "<Notes>Extra.</Notes>\n    <ImplementationPlan>");
+      const edits = [
+        commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { baseline }) }, owned("docs: edit baseline")),
+        commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { baseline, target }) }, owned("docs: edit target")),
+        commit(root, { [ACTIVE_PLAN]: gates }, owned("docs: edit durable")),
+        commit(root, { [ACTIVE_PLAN]: rooted }, owned("docs: edit root")),
+        commit(root, { [ACTIVE_PLAN]: wrapped }, owned("docs: edit wrapper")),
+        commit(root, { [ACTIVE_PLAN]: unknown }, owned("docs: add unknown section")),
+        commit(root, { [ACTIVE_PLAN]: unknown.replace("</ObservedWriteScope>", "") }, owned("docs: break plan")),
+      ];
+
+      const { issues, report } = check(root);
+      expect(report.amendments).toEqual([]);
+      expect(report.mutations).toEqual(
+        [["BaselineAssertions"], ["TargetAssertions"], ["DurableScope"], ["root"], ["wrapper"], ["Notes"], ["unparseable"]]
+          .map((sections, index) => ({ commit: short(edits[index]!), sections })),
+      );
+      expect(codes(issues)).toEqual(edits.map(() => `error:scope.approved-plan-mutated:${ACTIVE_PLAN}`));
+    });
+
+    it("a commit changing both a task and TargetAssertions raises only the mutation", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      const edit = commit(
+        root,
+        { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { tasks: "<T-001><Title>Changed</Title></T-001>", target: "<MustVerify><Module>M-OTHER</Module></MustVerify>" }) },
+        owned("docs: edit task and target"),
+      );
+
+      const { issues, report } = check(root);
+      expect(report.mutations).toEqual([{ commit: short(edit), sections: ["TargetAssertions", "ImplementationPlan"] }]);
+      expect(report.amendments).toEqual([]);
+      expect(codes(issues)).toEqual([`error:scope.approved-plan-mutated:${ACTIVE_PLAN}`]);
+      expect(issues[0]!.message).toContain("TargetAssertions, ImplementationPlan");
+    });
+
+    it("lists files matching committedScopeExempt under exempt and raises no issue for them", () => {
+      const { root } = approvedRepo(["src/a.ts", ".beads/**"]);
+      commit(root, { "src/a.ts": "a\n", ".beads/issues.jsonl": "1\n", "notes/draft.md": "d\n" }, owned("feat: write a with bookkeeping"));
+      commit(root, { ".beads/issues.jsonl": "2\n", ".beads/sub/state.json": "{}\n" }, owned("chore: bookkeeping"));
+      const untagged = commit(root, { ".beads/issues.jsonl": "3\n" }, "chore: untagged bookkeeping");
+      const exempt = [".beads/**", "notes/*.md"];
+
+      const { issues, report } = check(root, { requireChangeTrailers: false, exempt });
+      expect(report.exempt).toEqual([".beads/issues.jsonl", ".beads/sub/state.json", "notes/draft.md"]);
+      expect(report.approved).toEqual(["src/a.ts"]);
+      expect(report.errors).toEqual([]);
+      expect(report.untaggedInScope).toEqual([]);
+      expect(report.untaggedOther).toEqual({ count: 1, commits: [short(untagged)] });
+      expect(issues).toEqual([]);
+
+      const unexempted = check(root);
+      expect(unexempted.report.exempt).toEqual([]);
+      expect(codes(unexempted.issues)).toEqual([
+        "error:scope.committed-outside:notes/draft.md",
+        "warning:scope.untagged-commit:.beads/issues.jsonl",
+      ]);
     });
 
     it("warns with scope.reapproval-widened", () => {

@@ -330,7 +330,7 @@ describe("grace status", () => {
     runGit(root, ["add", "."]);
     runGit(root, ["commit", "-m", "test: baseline"]);
     const planFile = path.join(root, ".grace/changes/active/C-IMMUTABLE/plan.xml");
-    writeFileSync(planFile, readFileSync(planFile, "utf8").replace("Apply the change.", "Apply the edited change."));
+    writeFileSync(planFile, readFileSync(planFile, "utf8").replace("<BaselineAssertions><MustExist><Value>M-EXAMPLE</Value></MustExist>", "<BaselineAssertions><MustExist><Value>src/example.ts</Value></MustExist>"));
 
     const result = await collectProjectStatus(root);
     const change = result.changes.find((entry) => entry.changeId === "C-IMMUTABLE")!;
@@ -381,19 +381,98 @@ describe("grace status", () => {
     expect(result.nextAction).toContain("Hard stop");
   });
 
-  it("keeps a widening that also edits another plan section as a hard stop", async () => {
+  it("keeps a widening that also edits a gate section as a hard stop", async () => {
     const { root, planFile } = initCommittedProject("C-MIXED");
     writeFileSync(
       planFile,
       readFileSync(planFile, "utf8")
         .replace("<File>src/example.ts</File>", "<File>src/example.ts</File><File>src/extra.ts</File>")
-        .replace("Apply the change.", "Apply the edited change."),
+        .replace("<GraphAnchors><M-EXAMPLE /></GraphAnchors>", "<GraphAnchors><M-EXAMPLE /><M-OTHER /></GraphAnchors>"),
     );
 
     const result = await collectProjectStatus(root);
     const change = result.changes.find((entry) => entry.changeId === "C-MIXED")!;
     expect(change.derivedStates).toContain("approved-contract-drift");
     expect(change.derivedStates).not.toContain("approved-scope-widening-pending");
+    expect(result.nextAction).toContain("Hard stop");
+  });
+
+  it("reports a task-only edit of an approved plan as approved-plan-amendment-pending, explained", async () => {
+    const { root, planFile } = initCommittedProject("C-AMEND");
+    writeFileSync(planFile, readFileSync(planFile, "utf8").replace("<Title>Apply change</Title>", "<Title>Apply the amended change</Title>"));
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-AMEND")!;
+    expect(result.observedDrift.explainedFiles).toContain(".grace/changes/active/C-AMEND/plan.xml");
+    expect(result.observedDrift.unexplainedFiles).not.toContain(".grace/changes/active/C-AMEND/plan.xml");
+    expect(change.derivedStates).toContain("approved-plan-amendment-pending");
+    expect(change.derivedStates).not.toContain("approved-scope-widening-pending");
+    expect(change.derivedStates).not.toContain("ready-to-execute");
+    expect(result.derivedStates).toContain("approved-plan-amendment-pending");
+    expect(result.derivedStates).not.toContain("approved-contract-drift");
+    expect(result.derivedStates).not.toContain("unexplained-observed-drift");
+    expect(result.nextAction).toBe("Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body.");
+  });
+
+  it("reports an IntentSummary-only edit as approved-plan-amendment-pending", async () => {
+    const { root, planFile } = initCommittedProject("C-INTENT");
+    writeFileSync(planFile, readFileSync(planFile, "utf8").replace("<IntentSummary>Apply the change.</IntentSummary>", "<IntentSummary>Apply the amended change.</IntentSummary>"));
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-INTENT")!;
+    expect(change.derivedStates).toContain("approved-plan-amendment-pending");
+    expect(result.nextAction).toBe("Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body.");
+  });
+
+  it("a TargetAssertions edit stays approved-contract-drift", async () => {
+    const { root, planFile } = initCommittedProject("C-TARGET");
+    writeFileSync(
+      planFile,
+      readFileSync(planFile, "utf8").replace(
+        "<TargetAssertions><MustVerify><Module>M-EXAMPLE</Module></MustVerify></TargetAssertions>",
+        "<TargetAssertions><MustVerify><Module>M-EXAMPLE</Module></MustVerify><MustExist><Value>M-EXAMPLE</Value></MustExist></TargetAssertions>",
+      ),
+    );
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-TARGET")!;
+    expect(change.derivedStates).toContain("approved-contract-drift");
+    expect(change.derivedStates).not.toContain("approved-plan-amendment-pending");
+    expect(result.observedDrift.unexplainedFiles).toContain(".grace/changes/active/C-TARGET/plan.xml");
+    expect(result.nextAction).toContain("Hard stop");
+  });
+
+  it("a widening plus a task edit is amendment-pending", async () => {
+    const { root, planFile } = initCommittedProject("C-WIDEN-AMEND");
+    writeFileSync(
+      planFile,
+      readFileSync(planFile, "utf8")
+        .replace("<File>src/example.ts</File>", "<File>src/example.ts</File><File>src/extra.ts</File>")
+        .replace("<Title>Apply change</Title>", "<Title>Apply the amended change</Title>"),
+    );
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-WIDEN-AMEND")!;
+    expect(result.observedDrift.explainedFiles).toContain(".grace/changes/active/C-WIDEN-AMEND/plan.xml");
+    expect(change.derivedStates).toContain("approved-plan-amendment-pending");
+    expect(change.derivedStates).not.toContain("approved-scope-widening-pending");
+    expect(change.derivedStates).not.toContain("approved-contract-drift");
+    expect(result.nextAction).toBe("Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body.");
+  });
+
+  it("a narrowed scope plus a task edit stays a hard stop", async () => {
+    const { root, planFile } = initCommittedProject("C-NARROW-AMEND");
+    writeFileSync(
+      planFile,
+      readFileSync(planFile, "utf8")
+        .replace("<File>src/example.ts</File>", "<None />")
+        .replace("<Title>Apply change</Title>", "<Title>Apply the amended change</Title>"),
+    );
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-NARROW-AMEND")!;
+    expect(change.derivedStates).toContain("approved-contract-drift");
+    expect(change.derivedStates).not.toContain("approved-plan-amendment-pending");
     expect(result.nextAction).toContain("Hard stop");
   });
 

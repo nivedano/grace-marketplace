@@ -12,7 +12,7 @@ import { ANCHOR_PATTERNS, type Grace4Issue, type Grace4ProjectPaths } from "../g
 import { readGraceXmlArtifact } from "../grace4/xml";
 import { analyzeGovernedFile, collectCodeFiles, describeUnreadableDirectory, hasGraceMarkers, type UnreadableDirectoryHandler } from "../project-utils";
 import { withLintIssueGuide } from "./catalog";
-import { loadGraceLintConfig, resolveRunLogRetention } from "./config";
+import { committedScopeExemptGlobs, loadGraceLintConfig, resolveRunLogRetention } from "./config";
 import type { CommandEvidence, LintIssue, LintOptions, LintProfile, LintResult } from "./types";
 
 const TEXT_FORMAT_OPTIONS = new Set(["text", "json"]);
@@ -346,8 +346,11 @@ function applyCommittedScope(result: LintResult, root: string, options: LintOpti
   if (options.assertionMode !== "final" || !selectedPlan || !options.changeId) {
     return;
   }
-  const requireChangeTrailers = loadGraceLintConfig(root).config?.requireChangeTrailers ?? false;
-  const { issues, report } = checkCommittedScope(root, options.changeId, { requireChangeTrailers });
+  const { config } = loadGraceLintConfig(root);
+  const { issues, report } = checkCommittedScope(root, options.changeId, {
+    requireChangeTrailers: config?.requireChangeTrailers ?? false,
+    exempt: committedScopeExemptGlobs(config),
+  });
   for (const issue of issues) {
     addGrace4Issue(result, issue);
   }
@@ -451,10 +454,12 @@ function formatCommittedScopeSection(report: CommittedScopeReport): string[] {
   };
   section("Re-approval additions", report.reapprovalAdded.map((entry) => `${entry.commit}: ${capInline(entry.added)}`));
   section("Mutations", report.mutations.map((entry) => `${entry.commit}: ${capInline(entry.sections)}`));
+  section("Amendments", report.amendments.map((entry) => `${entry.commit}: ${capInline(entry.sections)}`));
   section("Widening commits", report.wideningCommits.map((entry) => `${entry.commit}: ${capInline(entry.added)}`));
   section("Errors", report.errors.map((entry) => `${entry.file} (${entry.code}) in ${entry.commit}`));
   section("Far", report.widenedFar);
   section("Near", report.widenedNear);
+  section("Exempt", report.exempt);
   lines.push(`  Owned commits: ${report.ownedCommits}`);
   if (report.untaggedInScope.length > 0) {
     lines.push(`  In scope without trailer (${report.untaggedInScope.length}): ${capInline(report.untaggedInScope)}`);

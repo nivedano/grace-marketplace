@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { NearFar, PackageRoots, PathRule } from "./committed-scope-near";
-import { comparePlansIgnoringObservedScope } from "./plan-compare";
+import { comparePlansIgnoringObservedScope, isPlanAmendment } from "./plan-compare";
 import { extractObservedWriteScope, observedWriteScopeContains, type ObservedWriteScope } from "./scope";
 import type { Grace4Issue } from "./types";
 import { parseGraceXmlArtifact, type GraceXmlNode } from "./xml";
@@ -24,8 +24,13 @@ export type PlanHistory = {
   /** A, plus every later commit whose plan status changes into approved from a known other status. */
   approvalPoints: string[];
   versions: PlanVersion[];
-  /** Consecutive approved versions after A that differ apart from the wrapper's direct ObservedWriteScope. */
+  /**
+   * Consecutive approved versions after A that differ apart from the wrapper's direct ObservedWriteScope in a gate
+   * section: anything but ImplementationPlan and IntentSummary, or an unparseable version.
+   */
   mutations: { commit: string; sections: string[] }[];
+  /** Consecutive approved versions after A whose only differing sections are ImplementationPlan and IntentSummary. */
+  amendments: { commit: string; sections: string[] }[];
   /** Approved plan commits after A that follow an approved version, are not approval points, and gain ObservedWriteScope entries. */
   wideningCommits: { commit: string; added: string[] }[];
   /** Entries a re-approval point added over the last approved version before its gap, minus earlier widening entries. */
@@ -75,6 +80,7 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
     approvalPoints: [],
     versions: versions.map(({ commit, status, scope, parsed }) => ({ commit, status, scope, parsed })),
     mutations: [],
+    amendments: [],
     wideningCommits: [],
     reapprovalAdded: [],
     approvedScope: emptyScope(),
@@ -113,7 +119,8 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
         } else {
           const comparison = comparePlansIgnoringObservedScope(previous.root, current.root);
           if (!comparison.equal) {
-            history.mutations.push({ commit: current.commit, sections: comparison.sections });
+            const edits = isPlanAmendment(comparison.sections) ? history.amendments : history.mutations;
+            edits.push({ commit: current.commit, sections: comparison.sections });
           }
         }
       }
@@ -142,6 +149,7 @@ export type CommittedScopeReport = {
   approvalPoints: string[];
   reapprovalAdded: { commit: string; added: string[] }[];
   mutations: { commit: string; sections: string[] }[];
+  amendments: { commit: string; sections: string[] }[];
   wideningCommits: { commit: string; added: string[] }[];
   ownedCommits: number;
   untaggedInScope: string[];
@@ -149,17 +157,21 @@ export type CommittedScopeReport = {
   approved: string[];
   widenedNear: string[];
   widenedFar: string[];
+  /** Owned-commit files matching a committedScopeExempt glob, sorted; they get no other class. */
+  exempt: string[];
   errors: { file: string; code: string; commit: string }[];
   /** Set when the history could not be read: not a git worktree, or a shallow clone. */
   skipped?: "not-git" | "shallow";
 };
 
 /**
- * requireChangeTrailers makes scope.no-owned-commits an error. ownershipFallback is a test-only replay switch that
- * also owns any commit whose message names the change id; no CLI flag exposes it.
+ * requireChangeTrailers makes scope.no-owned-commits an error. exempt holds committedScopeExempt globs in the
+ * ObservedWriteScope glob grammar; matching files are listed and never classified. ownershipFallback is a test-only
+ * replay switch that also owns any commit whose message names the change id; no CLI flag exposes it.
  */
 export type CommittedScopeOptions = {
   requireChangeTrailers: boolean;
+  exempt?: string[];
   ownershipFallback?: "message-mentions-id";
 };
 
@@ -209,6 +221,7 @@ export function checkCommittedScope(
   report.approvalPoints = history.approvalPoints.map(short);
   report.reapprovalAdded = history.reapprovalAdded.map((entry) => ({ commit: short(entry.commit), added: entry.added }));
   report.mutations = history.mutations.map((entry) => ({ commit: short(entry.commit), sections: entry.sections }));
+  report.amendments = history.amendments.map((entry) => ({ commit: short(entry.commit), sections: entry.sections }));
   report.wideningCommits = history.wideningCommits.map((entry) => ({ commit: short(entry.commit), added: entry.added }));
   for (const mutation of history.mutations) {
     issues.push(issue(
@@ -216,6 +229,14 @@ export function checkCommittedScope(
       "scope.approved-plan-mutated",
       planFile,
       `Approved plan of ${changeId} changed outside ObservedWriteScope in ${short(mutation.commit)} without a re-approval: ${mutation.sections.join(", ")}.`,
+    ));
+  }
+  for (const amendment of history.amendments) {
+    issues.push(issue(
+      "warning",
+      "scope.approved-plan-amended",
+      planFile,
+      `Approved plan of ${changeId} was amended in ${short(amendment.commit)} without a re-approval: ${amendment.sections.join(", ")}.`,
     ));
   }
   for (const entry of history.reapprovalAdded) {
@@ -228,6 +249,8 @@ export function checkCommittedScope(
   const position = new Map(window.map((entry, index) => [entry.hash, index]));
   const approvalIndex = position.get(history.approvalCommit) ?? -1;
   const isGrace = (file: string) => rule.within(file, ".grace");
+  const exemptScope: ObservedWriteScope = { files: [], globs: options.exempt ?? [] };
+  const isExempt = (file: string) => observedWriteScopeContains(exemptScope, file);
 
   // Earliest owned write of each file, in topological order.
   const earliest = new Map<string, { file: string; index: number; hash: string }>();
@@ -259,8 +282,13 @@ export function checkCommittedScope(
     issues.push(issue("error", code, file, message));
   };
 
+  const exempt = new Set<string>();
   for (const { file, index, hash } of earliest.values()) {
     if (isGrace(file)) {
+      continue;
+    }
+    if (isExempt(file)) {
+      exempt.add(file);
       continue;
     }
     if (index < approvalIndex) {
@@ -301,6 +329,8 @@ export function checkCommittedScope(
     }
   }
 
+  report.exempt = [...exempt].sort();
+
   const untaggedInScope: { commit: WindowCommit; files: string[] }[] = [];
   const untaggedOther: string[] = [];
   for (const entry of window) {
@@ -309,7 +339,7 @@ export function checkCommittedScope(
     if (tagged || code.length === 0) {
       continue;
     }
-    const inScope = code.filter((file) => observedWriteScopeContains(history.finalScope, file));
+    const inScope = code.filter((file) => !isExempt(file) && observedWriteScopeContains(history.finalScope, file));
     if (inScope.length > 0) {
       untaggedInScope.push({ commit: entry, files: inScope });
     } else {
@@ -462,6 +492,7 @@ function emptyReport(changeId: string): CommittedScopeReport {
     approvalPoints: [],
     reapprovalAdded: [],
     mutations: [],
+    amendments: [],
     wideningCommits: [],
     ownedCommits: 0,
     untaggedInScope: [],
@@ -469,6 +500,7 @@ function emptyReport(changeId: string): CommittedScopeReport {
     approved: [],
     widenedNear: [],
     widenedFar: [],
+    exempt: [],
     errors: [],
   };
 }

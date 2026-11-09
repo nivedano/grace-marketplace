@@ -86,6 +86,8 @@ export type GraceLintConfig = {
   runLogRetention?: number;
   /** Requires change trailers on commits; default false. */
   requireChangeTrailers?: boolean;
+  /** Globs in the ObservedWriteScope glob grammar whose files the committed-scope check lists and never classifies; default empty. */
+  committedScopeExempt?: string[];
 };
 
 export type MarkupSection = {

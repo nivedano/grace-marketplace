@@ -8,7 +8,7 @@ import { projectSlug } from "./grace4/run-log-store";
 import { writeMinimalGrace4Project as writeGit4Project } from "./grace4/test-fixtures";
 import { formatTextReport, lintGraceProject, parseCommandTimeoutMs, parseKeepRuns, resolveCommandVerbosity } from "./grace-lint";
 import { getLintIssueGuide } from "./lint/catalog";
-import { loadGraceLintConfig, resolveRunLogRetention } from "./lint/config";
+import { committedScopeExemptGlobs, loadGraceLintConfig, resolveRunLogRetention } from "./lint/config";
 
 function createProject() {
   return mkdtempSync(path.join(os.tmpdir(), "grace-lint-"));
@@ -830,6 +830,28 @@ describe("run-commands log retention", () => {
     expect(issues[0].severity).toBe("error");
   });
 
+  it("accepts committedScopeExempt globs", () => {
+    const root = createProject();
+    writeProjectFile(root, ".grace-lint.json", `{ "committedScopeExempt": [".beads/**", "docs/*.md", "VERSION"] }\n`);
+
+    const { config, issues } = loadGraceLintConfig(root);
+    expect(issues).toEqual([]);
+    expect(config?.committedScopeExempt).toEqual([".beads/**", "docs/*.md", "VERSION"]);
+    expect(committedScopeExemptGlobs(config)).toEqual([".beads/**", "docs/*.md", "VERSION"]);
+  });
+
+  it("rejects an invalid committedScopeExempt", () => {
+    for (const value of [`".beads/**"`, `[1]`, `["src/{a,b}.ts"]`, `["../outside/**"]`, `["src/a**b.ts"]`]) {
+      const root = createProject();
+      writeProjectFile(root, ".grace-lint.json", `{ "committedScopeExempt": ${value} }\n`);
+
+      const { config, issues } = loadGraceLintConfig(root);
+      expect(issues.map((issue) => issue.code)).toEqual(["config.invalid-committed-scope-exempt"]);
+      expect(issues[0]!.severity).toBe("error");
+      expect(committedScopeExemptGlobs(config)).toEqual([]);
+    }
+  });
+
   it("resolves retention precedence: flag, then config, then the default", () => {
     expect(resolveRunLogRetention(3, { runLogRetention: 1 })).toBe(3);
     expect(resolveRunLogRetention(0, { runLogRetention: 1 })).toBe(0);
@@ -946,6 +968,27 @@ describe("committed-scope check in final mode", () => {
     expect(result.issues.find((issue) => issue.code === "scope.no-owned-commits")?.severity).toBe("error");
   });
 
+  it("passes committedScopeExempt from config to the check", async () => {
+    const root = createRepo();
+    writeGit4Project(root);
+    commit(root, { "README.md": "fixture\n", ".grace-lint.json": `{"committedScopeExempt": [".beads/**"]}\n` }, "chore: seed");
+    commit(
+      root,
+      {
+        [`.grace/changes/active/${CHANGE}/spec.xml`]: gitSpec(CHANGE, "approved"),
+        [`.grace/changes/active/${CHANGE}/plan.xml`]: gitPlan(CHANGE, "approved", ["src/a.ts"]),
+      },
+      `docs: approve\n\nChange: ${CHANGE}`,
+    );
+    commit(root, { "src/a.ts": "a\n", ".beads/issues.jsonl": "1\n" }, `feat: write a\n\nChange: ${CHANGE}`);
+
+    const result = await lintGraceProject(root, { assertionMode: "final", changeId: CHANGE });
+
+    expect(result.committedScope?.exempt).toEqual([".beads/issues.jsonl"]);
+    expect(result.committedScope?.errors).toEqual([]);
+    expect(result.issues.some((issue) => issue.code === "scope.committed-outside")).toBe(false);
+  });
+
   it("text report prints the Committed scope section with capped lists", async () => {
     const root = committedScopeRepo();
     const result = await lintGraceProject(root, { assertionMode: "final", changeId: CHANGE });
@@ -957,6 +1000,7 @@ describe("committed-scope check in final mode", () => {
       approvalPoints: ["2222222"],
       reapprovalAdded: [{ commit: "3333333", added: ["src/re.ts"] }],
       mutations: [{ commit: "4444444", sections: ["TargetAssertions"] }],
+      amendments: [{ commit: "4545454", sections: ["IntentSummary", "ImplementationPlan"] }],
       wideningCommits: [{ commit: "5555555", added: ["src/near.ts", ...far] }],
       ownedCommits: 3,
       untaggedInScope: ["6666666"],
@@ -964,6 +1008,7 @@ describe("committed-scope check in final mode", () => {
       approved: ["src/a.ts"],
       widenedNear: ["src/near.ts"],
       widenedFar: far,
+      exempt: [".beads/issues.jsonl", ...Array.from({ length: 21 }, (_, index) => `.beads/e-${index}.json`)],
       errors: [{ file: "src/other.ts", code: "scope.committed-outside", commit: "9999999" }],
     };
 
@@ -974,6 +1019,12 @@ describe("committed-scope check in final mode", () => {
     expect(text).toContain("A: 2222222bbbb");
     expect(text).toContain("3333333: src/re.ts");
     expect(text).toContain("4444444: TargetAssertions");
+    expect(text).toContain("Amendments (1):");
+    expect(text).toContain("4545454: IntentSummary, ImplementationPlan");
+    expect(text).toContain("Exempt (22):");
+    expect(text).toContain(".beads/e-18.json");
+    expect(text).not.toContain(".beads/e-19.json");
+    expect(text).toContain("… 2 more");
     expect(text).toContain("5555555: src/near.ts");
     expect(text).toContain("src/other.ts (scope.committed-outside) in 9999999");
     expect(text).toContain("src/far-19.ts");
@@ -1005,6 +1056,7 @@ describe("committed-scope check in final mode", () => {
       "scope.written-before-widening",
       "scope.written-before-approval",
       "scope.approved-plan-mutated",
+      "scope.approved-plan-amended",
       "scope.approval-uncommitted",
       "scope.no-owned-commits",
       "scope.reapproval-widened",
@@ -1020,5 +1072,19 @@ describe("committed-scope check in final mode", () => {
       expect(guide.title).not.toBe(prefixTitle);
       expect(guide.remediation.length).toBeGreaterThan(0);
     }
+  });
+
+  it("scope.approved-plan-amended and config.invalid-committed-scope-exempt have guides", () => {
+    const fallback = getLintIssueGuide("unknown.no-guide").explanation;
+    const scopePrefix = getLintIssueGuide("scope.unknown-code").explanation;
+    for (const code of ["scope.approved-plan-amended", "config.invalid-committed-scope-exempt"]) {
+      const guide = getLintIssueGuide(code);
+      expect(guide.explanation).not.toBe(fallback);
+      expect(guide.explanation).not.toBe(scopePrefix);
+      expect(guide.remediation.length).toBeGreaterThan(0);
+    }
+    expect(getLintIssueGuide("scope.approved-plan-amended").explanation).toContain("ImplementationPlan");
+    expect(getLintIssueGuide("scope.approved-plan-mutated").explanation).toContain("BaselineAssertions");
+    expect(getLintIssueGuide("config.invalid-committed-scope-exempt").explanation).toContain("committedScopeExempt");
   });
 });

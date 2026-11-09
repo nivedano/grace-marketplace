@@ -33,6 +33,11 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
     explanation: "`requireChangeTrailers` in .grace-lint.json switches change-trailer requirements on or off, so it must be a boolean.",
     remediation: ["Set requireChangeTrailers to true or false.", "Remove the key to use the default of false."],
   },
+  "config.invalid-committed-scope-exempt": {
+    title: "Invalid Committed Scope Exempt",
+    explanation: "`committedScopeExempt` in .grace-lint.json lists bookkeeping files that the committed-scope check reports but never classifies, so it must be an array of globs in the ObservedWriteScope glob grammar: project-relative literals, *, ? and a whole-segment **.",
+    remediation: ["Write each entry as a project-relative glob such as .beads/**.", "Remove the key to exempt nothing."],
+  },
   "analysis.adapter-failed": {
     title: "Language Adapter Failed",
     explanation: "The file-level export analysis adapter failed, so exact export/local parity could not be validated for this governed file.",
@@ -80,8 +85,13 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
   },
   "scope.approved-plan-mutated": {
     title: "Approved Plan Mutated",
-    explanation: "An approved plan.xml changed in a section other than ObservedWriteScope without a re-approval.",
+    explanation: "An approved plan.xml changed in a gate section without a re-approval: BaselineAssertions, TargetAssertions, DurableScope, the root or C-* wrapper, or any section other than ObservedWriteScope, ImplementationPlan and IntentSummary. An unparseable approved version counts as well.",
     remediation: ["Restore the approved sections of plan.xml.", "To change them, create a new C-* bundle and mark the old bundle superseded."],
+  },
+  "scope.approved-plan-amended": {
+    title: "Approved Plan Amended",
+    explanation: "An approved plan.xml changed only in ImplementationPlan tasks or IntentSummary, without a re-approval. Such an amendment needs the user's agreement and is investigated at review.",
+    remediation: ["Confirm the user agreed to the amendment and that its commit body records that agreement.", "Commit an amendment on its own, touching nothing outside .grace/."],
   },
   "scope.approval-uncommitted": {
     title: "Approval Not Committed",
