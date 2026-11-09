@@ -41,11 +41,11 @@ Errors:
 - `scope.approval-uncommitted`: no commit has `plan.xml` committed as `approved`; commit the approved `plan.xml`. Writes committed before it are reported as `scope.written-before-approval`.
 - `scope.no-owned-commits`: the scope is not `<None />` and no commit carries the `Change: <C-ID>` trailer; an error when `requireChangeTrailers` is `true`, otherwise a warning.
 - `scope.committed-check-failed`: a git command the check needs failed, for example a dubious-ownership refusal; the message names the command and carries git's stderr.
-Treat a committed-scope error as fixed in history, since no new commit clears it: stop and report it to the user, who chooses between rewriting unpublished history and superseding the bundle.
+Treat a committed-scope error other than `scope.approval-uncommitted` and `scope.committed-check-failed` as fixed in history, since no new commit clears it: stop and report it to the user, who chooses between rewriting unpublished history and superseding the bundle.
 Warnings:
 - `scope.approved-plan-amended`: an approved plan changed outside `ObservedWriteScope` only in `ImplementationPlan` or `IntentSummary`, with no `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` nested inside either version; the report lists each such commit under `amendments`.
 - `scope.reapproval-widened`: a re-approval added `ObservedWriteScope` entries.
-- `scope.reapproval-changed-gates`: a re-approval changed `BaselineAssertions`, `TargetAssertions` or `DurableScope` relative to the last approved version; the report lists each such commit under `reapprovalChangedGates`.
+- `scope.reapproval-changed-gates`: a re-approval changed `BaselineAssertions`, `TargetAssertions`, `DurableScope` or another section outside `ObservedWriteScope`, `ImplementationPlan` and `IntentSummary` relative to the last approved version; the report lists each such commit under `reapprovalChangedGates`.
 - `scope.widened-far`: an admitted file lies outside the directories and packages of the approved scope.
 - `scope.untagged-commit`: a commit without an effective `Change` trailer touched a file in the final scope; a merge commit, or a trailer naming no active bundle, counts as untagged.
 - `scope.committed-check-skipped`: no `.git` is found at or above the project root, or the clone is shallow.

@@ -37,7 +37,7 @@ Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only aft
 - Treat a `Change:` line anywhere else as prose; it is not a trailer.
 - Commit the approved `plan.xml` in or before the first commit that writes outside `.grace/`.
 - Run `grace status` before each commit; stop and report unexplained files.
-- Treat a committed-scope error as fixed in history, since no new commit clears it: stop and report it to the user, who chooses between rewriting unpublished history and superseding the bundle.
+- Treat a committed-scope error other than `scope.approval-uncommitted` and `scope.committed-check-failed` as fixed in history, since no new commit clears it: stop and report it to the user, who chooses between rewriting unpublished history and superseding the bundle.
 </commit_contract>
 
 <recovery_decision_table>
