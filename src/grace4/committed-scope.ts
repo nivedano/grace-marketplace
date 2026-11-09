@@ -21,9 +21,9 @@ export type PlanHistory = {
   versions: PlanVersion[];
   /** Consecutive approved versions after A that differ apart from the wrapper's direct ObservedWriteScope. */
   mutations: { commit: string; sections: string[] }[];
-  /** Plan commits after A, not approval points, whose ObservedWriteScope gains entries over the previous version. */
+  /** Approved plan commits after A that follow an approved version, are not approval points, and gain ObservedWriteScope entries. */
   wideningCommits: { commit: string; added: string[] }[];
-  /** Entries a re-approval point added over the version before it, minus entries an earlier widening commit added. */
+  /** Entries a re-approval point added over the last approved version before its gap, minus earlier widening entries. */
   reapprovalAdded: { commit: string; added: string[] }[];
   /** The scope at A plus reapprovalAdded entries. */
   approvedScope: ObservedWriteScope;
@@ -87,14 +87,16 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
   history.approvedScope = copyScope(approval.scope!);
 
   const widened = emptyScope();
-  let lastScope = approval.scope!;
+  // Scope of the last parsed approved version: the base for both widenings and re-approvals, so entries added
+  // during a non-approved gap surface at the re-approval rather than as a widening.
+  let lastApprovedScope = approval.scope!;
   for (let index = approvalIndex + 1; index < versions.length; index += 1) {
     const previous = versions[index - 1]!;
     const current = versions[index]!;
 
     if (current.parsed && current.status === APPROVED && !maybeApproved(previous)) {
       history.approvalPoints.push(current.commit);
-      const added = scopeDifference(scopeDifference(current.scope!, lastScope), widened);
+      const added = scopeDifference(scopeDifference(current.scope!, lastApprovedScope), widened);
       if (scopeEntries(added).length > 0) {
         history.reapprovalAdded.push({ commit: current.commit, added: scopeEntries(added) });
         history.approvedScope = scopeUnion(history.approvedScope, added);
@@ -110,8 +112,8 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
           }
         }
       }
-      if (current.scope) {
-        const added = scopeDifference(current.scope, lastScope);
+      if (current.scope && current.status === APPROVED && maybeApproved(previous)) {
+        const added = scopeDifference(current.scope, lastApprovedScope);
         if (scopeEntries(added).length > 0) {
           history.wideningCommits.push({ commit: current.commit, added: scopeEntries(added) });
           Object.assign(widened, scopeUnion(widened, added));
@@ -119,8 +121,8 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
       }
     }
 
-    if (current.scope) {
-      lastScope = current.scope;
+    if (current.scope && current.status === APPROVED) {
+      lastApprovedScope = current.scope;
     }
   }
 

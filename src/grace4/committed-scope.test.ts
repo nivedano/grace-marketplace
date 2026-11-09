@@ -112,6 +112,33 @@ describe("readPlanHistory", () => {
     expect(result.approvedScope).toEqual({ files: ["src/a.ts"], globs: ["src/lib/**"] });
   });
 
+  it("counts entries added during a draft period as reapprovalAdded, not as a widening", () => {
+    const root = seeded();
+    commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"]) }, "docs: approve");
+    commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts", "src/b.ts"]) }, "docs: reopen and add b");
+    const reapproval = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts", "src/b.ts"]) }, "docs: re-approve");
+
+    const result = history(root);
+    expect(result.wideningCommits).toEqual([]);
+    expect(result.reapprovalAdded).toEqual([{ commit: reapproval, added: ["src/b.ts"] }]);
+    expect(result.approvedScope).toEqual({ files: ["src/a.ts", "src/b.ts"], globs: [] });
+  });
+
+  it("keeps a widening restored by a re-approval out of the approved scope", () => {
+    const root = seeded();
+    commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"]) }, "docs: approve");
+    const widening = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts", "src/c.ts"]) }, "docs: widen");
+    commit(root, { [ACTIVE_PLAN]: plan(ID, "cancelled", ["src/a.ts", "src/c.ts"]) }, "docs: cancel");
+    const reapproval = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts", "src/c.ts"]) }, "docs: restore");
+
+    const result = history(root);
+    expect(result.approvalPoints).toHaveLength(2);
+    expect(result.approvalPoints[1]).toBe(reapproval);
+    expect(result.wideningCommits).toEqual([{ commit: widening, added: ["src/c.ts"] }]);
+    expect(result.reapprovalAdded).toEqual([]);
+    expect(result.approvedScope).toEqual({ files: ["src/a.ts"], globs: [] });
+  });
+
   it("records a widening commit with its added entries", () => {
     const root = seeded();
     commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"]) }, "docs: approve");
