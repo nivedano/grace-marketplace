@@ -334,3 +334,119 @@ describe("grace-setup-subagents auditor preset", () => {
     ]);
   });
 });
+
+/** The approval binding stated verbatim in grace-spec `<status_rules>` and grace-plan `<must_do>`. */
+const PAIR_APPROVAL = "the user explicitly approves the pair at the approval step of `$grace-brief` after the audit";
+/** The decision-record shape stated verbatim in grace-spec and grace-brief. */
+const DECISION_SHAPE = "as one `Decision` under `OwnerDecisions`, with `Date`, `Question`, `Chosen`, and one `Rejected` per option not taken";
+const DRAFT_PAIR_FILES = [
+  "skills/grace/grace-spec/SKILL.md",
+  "skills/grace/grace-spec/references/design-context-template.xml",
+  "skills/grace/grace-plan/SKILL.md",
+];
+
+/** The YAML frontmatter of a skill, `---` to `---`. */
+function frontmatter(text: string): string {
+  expect(text.startsWith("---\n")).toBe(true);
+  return text.slice(0, text.indexOf("\n---\n", 4) + 5);
+}
+
+describe("draft pair: grace-spec", () => {
+  const skill = read("skills/grace/grace-spec/SKILL.md");
+
+  it("drafts the spec in its frontmatter description", () => {
+    const head = frontmatter(skill);
+    expect(head).not.toContain("create an approved");
+    expect(head).toContain("draft a GRACE 4 GraceChangeSpec");
+  });
+
+  it("asks for no approval and hands the draft spec to grace-plan in the same session", () => {
+    const workflow = block(skill, "workflow");
+    expect(workflow).not.toContain("Ask for approval");
+    expect(workflow).not.toContain("approval step needed");
+    expectAll(workflow, [
+      "Ask for no approval.",
+      "as `status=\"draft\"`",
+      "Write `Summary` and `Problem` one sentence per line.",
+      "Put only technical assumptions in `Assumptions`.",
+      "Hand the draft `spec.xml` to `$grace-plan` in the same session.",
+    ]);
+  });
+
+  it("records owner decisions in design-context.xml as they are made", () => {
+    const decisions = block(skill, "owner_decisions");
+    expectAll(decisions, [
+      `Record each decision of the user in \`design-context.xml\` ${DECISION_SHAPE}, when it is made.`,
+      "`Date` is the day the user decided.",
+      "each choice between alternatives",
+      "each decline",
+      "each boundary the user fixed",
+      "exactly one consensus `Decision` at the end of the interview whose `Chosen` lists the theses of the design summary the user accepted",
+      "Record no accepted `Goal` or `Criterion` one by one.",
+      "a direct child of the root `GraceChangeDesignContext` when the bundle identity is a `<Change>` element, after `DeferredDecisions` as in `references/design-context-template.xml`",
+      "a child of the `C-*` wrapper in the wrapper form",
+      "`$grace-brief` adds the answers of the audit loop the same way.",
+    ]);
+    expect(block(read(`${BRIEF_DIR}/SKILL.md`), "owner_decision")).toContain(DECISION_SHAPE);
+  });
+
+  it("requires design-context.xml once a decision is recorded", () => {
+    expect(block(skill, "change_bundle_contract")).toContain(
+      "`design-context.xml` — explanatory only; required once `OwnerDecisions` holds a `Decision`",
+    );
+  });
+
+  it("sets approved only at the pair approval after the audit", () => {
+    const rules = block(skill, "status_rules");
+    expect(rules).not.toContain("only after explicit user approval");
+    expect(rules).toContain(`Set \`status="approved"\` only when ${PAIR_APPROVAL}.`);
+  });
+});
+
+describe("draft pair: grace-plan", () => {
+  const skill = read("skills/grace/grace-plan/SKILL.md");
+
+  it("names no approved spec in its frontmatter or purpose", () => {
+    expect(frontmatter(skill)).not.toMatch(/approved[^\n]*GraceChangeSpec/);
+    expect(block(skill, "purpose")).not.toMatch(/approved[^\n]*GraceChangeSpec/);
+  });
+
+  it("accepts a draft spec and refuses terminal ones", () => {
+    const preflight = block(skill, "preflight");
+    expect(preflight).toContain("status `draft` or `approved`");
+    expect(preflight).toContain("Refuse rejected, cancelled, applied, or superseded specs.");
+    expect(preflight).not.toContain("Refuse draft");
+  });
+
+  it("keeps the plan draft until the pair approval and asks for no approval", () => {
+    const mustDo = block(skill, "must_do");
+    expect(mustDo).toContain(`as draft unless ${PAIR_APPROVAL}. Ask for no approval.`);
+  });
+
+  it("names the draft baseline lint and grace-brief as the next steps", () => {
+    expectAll(block(skill, "validation"), [
+      "grace lint --path PROJECT --change C-CHANGE-ID --assertions baseline --draft",
+      "`$grace-brief`",
+    ]);
+  });
+});
+
+describe("draft pair: design-context template", () => {
+  const template = read("skills/grace/grace-spec/references/design-context-template.xml");
+
+  it("places OwnerDecisions after DeferredDecisions with one example Decision", () => {
+    const deferredEnd = template.indexOf("</DeferredDecisions>");
+    expect(deferredEnd).toBeGreaterThanOrEqual(0);
+    expect(template.indexOf("<OwnerDecisions>")).toBeGreaterThan(deferredEnd);
+    const decisions = block(template, "OwnerDecisions");
+    expect(decisions.match(/<Decision>/g)).toHaveLength(1);
+    expectAll(decisions, ["<Date>$", "<Question>$", "<Chosen>$", "<Rejected>$"]);
+  });
+
+  it("mirrors the edited files byte-for-byte", () => {
+    for (const file of DRAFT_PAIR_FILES) {
+      const packaged = path.join(repoRoot, "plugins/grace", file);
+      expect(readFileSync(packaged).equals(readFileSync(path.join(repoRoot, file)))).toBe(true);
+    }
+  });
+});

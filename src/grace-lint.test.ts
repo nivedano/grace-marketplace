@@ -1273,3 +1273,52 @@ describe("draft baseline", () => {
     expect(noPlan.selectedPlanStatus).toBeUndefined();
   });
 });
+
+describe("design-context OwnerDecisions", () => {
+  const TEMPLATE = path.join(import.meta.dir, "..", "skills/grace/grace-spec/references/design-context-template.xml");
+
+  function bundleProject(changeId: string) {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeApprovedChange(root, changeId, `<MustExist><Value>M-EXAMPLE</Value></MustExist>`, `<MustVerify><Module>M-EXAMPLE</Module></MustVerify>`, "draft", "draft");
+    return root;
+  }
+
+  it("accepts a fixture built from design-context-template.xml", async () => {
+    const template = readFileSync(TEMPLATE, "utf8");
+    expect(template).toContain("<OwnerDecisions>");
+    const root = bundleProject("C-TEMPLATE");
+    writeProjectFile(root, ".grace/changes/active/C-TEMPLATE/design-context.xml", template.replaceAll("C-CHANGE-ID", "C-TEMPLATE"));
+
+    const result = await lintGraceProject(root);
+    expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(result.issues.filter((issue) => issue.code.startsWith("design-context."))).toEqual([]);
+  });
+
+  it("accepts OwnerDecisions with non-ASCII text", async () => {
+    const decisions =
+      "<OwnerDecisions><Decision><Date>2026-11-09</Date>" +
+      "<Question>Входит ли изменение размера окна под оверлеем в это изменение?</Question>" +
+      "<Chosen>Нет. Записано как оставшаяся половина iss-0122.</Chosen>" +
+      "<Rejected>Добавить захваты краёв поверх стека оверлеев.</Rejected>" +
+      "</Decision></OwnerDecisions>";
+    const root = bundleProject("C-CYRILLIC");
+    writeProjectFile(
+      root,
+      ".grace/changes/active/C-CYRILLIC/design-context.xml",
+      `<GraceChangeDesignContext graceVersion="4.0"><Change>C-CYRILLIC</Change><NormativeStatus>non-normative</NormativeStatus>${decisions}</GraceChangeDesignContext>`,
+    );
+    const wrapped = bundleProject("C-WRAPPED");
+    writeProjectFile(
+      wrapped,
+      ".grace/changes/active/C-WRAPPED/design-context.xml",
+      `<GraceChangeDesignContext graceVersion="4.0"><C-WRAPPED><NormativeStatus>non-normative</NormativeStatus>${decisions}</C-WRAPPED></GraceChangeDesignContext>`,
+    );
+
+    for (const project of [root, wrapped]) {
+      const result = await lintGraceProject(project);
+      expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+      expect(result.issues.filter((issue) => issue.code.startsWith("design-context."))).toEqual([]);
+    }
+  });
+});
