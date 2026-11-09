@@ -183,6 +183,10 @@ describe("committed-scope skill contracts", () => {
     expect(immutability).toContain("Create a new `C-*` bundle");
     expect(immutability).toContain("mark the old bundle superseded");
 
+    const explainerParagraph = statements[6]!;
+    expect(explainerParagraph).toContain("If baseline/target assertions or `DurableScope` need to change after approval");
+    expect(explainerParagraph).not.toContain("verification gates");
+
     const rule8 = statements[3]!;
     expect(rule8).toContain("Never edit approved assertions");
     expect(rule8).not.toContain("or tasks in place");
@@ -191,7 +195,9 @@ describe("committed-scope skill contracts", () => {
   it("reviews amendments", () => {
     const reviewer = read("skills/grace/grace-reviewer/SKILL.md");
     const block = slice(reviewer, "<scope_widening_review>", "</scope_widening_review>");
-    const line = block.split("\n").find((entry) => entry.includes("`amendments`"));
+    expect(block).toContain("it lists `ObservedWriteScope` widenings, amendments and exempt files");
+    expect(block).not.toContain("lists files admitted");
+    const line = block.split("\n").find((entry) => entry.includes("Return each `amendments`"));
     expect(line).toBeDefined();
     expect(line).toContain("archive commit body");
     expect(line).toContain("finding");
@@ -212,7 +218,10 @@ describe("committed-scope skill contracts", () => {
       "Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body.",
     );
     expect(block).toContain("approved-scope-widening-pending");
-    expect(block).toContain("approved-contract-drift");
+    expect(block).toContain(
+      "An edit to any other section of an approved `plan.xml`, a narrowed `ObservedWriteScope`, or any edit to `spec.xml` stays `approved-contract-drift`",
+    );
+    expect(block).not.toContain("gate section");
     expect(block).toContain("committedScopeExempt");
     expect(block).toContain("`ObservedWriteScope` glob grammar");
     expect(block).toContain("`exempt`");
