@@ -73,6 +73,21 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
     explanation: "A target command assertion invokes current-mode lifecycle lint. Current mode evaluates active approved baselines, so it is a pre-implementation check and cannot serve as target or final evidence after writes begin.",
     remediation: ["Keep MustPassCommand entries as leaf project evidence such as tests, typecheck, build, format, or package checks.", "Run selected target or final GRACE lint as the outer execution gate instead of nesting it inside the plan."],
   },
+  "verification.scenario-duplicate-id": {
+    title: "Duplicate Scenario Id",
+    explanation: "The same SC-* id appears on two <Scenario> elements. Because the entry is part of the id, every scenario id must be unique across the project.",
+    remediation: ["Give the later scenario the next free SC-<entry>-NNN id of its entry.", "Update any test that references the renumbered id."],
+  },
+  "verification.scenario-invalid-id": {
+    title: "Invalid Scenario Id",
+    explanation: "A <Scenario> id element is malformed, a <Scenario> carries a second id element, or the id's entry part does not match the enclosing V-M-* entry. An entry rename therefore surfaces at once.",
+    remediation: ["Use one empty, attribute-free SC-<entry>-NNN element per scenario, where <entry> is the enclosing V-M-* id without V-M- and NNN is three digits.", "After renaming an entry, renumber its scenario ids and the tests that reference them."],
+  },
+  "verification.scenario-dangling-reference": {
+    title: "Dangling Scenario Reference",
+    explanation: "A scanned file contains an SC-* token whose entry part names an existing V-M-* entry, but that entry has no scenario with that id. A token whose entry part matches no entry is ignored.",
+    remediation: ["Restore the scenario the token names, or point the token at the scenario the test actually proves.", "Remove the token if the scenario was deleted on purpose."],
+  },
 };
 
 const PREFIX_GUIDES: Array<{ prefix: string; title: string; explanation: string; remediation: string[] }> = [
@@ -147,6 +162,12 @@ const PREFIX_GUIDES: Array<{ prefix: string; title: string; explanation: string;
     title: "Export Surface Analysis Warning",
     explanation: "The language adapter could not prove the exact export surface or detected a shape that weakens precise linting.",
     remediation: ["Prefer clearer export declarations or explicit ROLE/MAP_MODE overrides when necessary.", "Treat heuristic or wildcard-export warnings as cues to simplify or document the file surface."],
+  },
+  {
+    prefix: "verification.",
+    title: "GRACE 4 Verification Evidence Issue",
+    explanation: "A V-M-* verification entry's scenarios or their references from project files are inconsistent.",
+    remediation: ["Repair the scenario ids under .grace/verification.", "Keep SC-* references in tests in step with the scenarios they prove."],
   },
 ];
 

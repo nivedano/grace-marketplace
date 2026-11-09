@@ -204,7 +204,11 @@ function toModuleVerificationRecord(record: VerificationAnchorRecord): ModuleVer
     cwd: record.cwd,
     testFiles: [...new Set([...inferredTestFiles, ...record.testFiles])].sort(),
     moduleChecks: record.commands,
-    scenarios: record.scenarios.map((text, index) => ({ tag: "Scenario-" + (index + 1), text })),
+    scenarios: record.scenarioRecords.map((scenario, index) => ({
+      tag: scenario.id ?? "Scenario-" + (index + 1),
+      text: scenario.text,
+      manualEvidence: scenario.manualEvidence,
+    })),
     requiredLogMarkers: record.markers,
     requiredTraceAssertions: record.traceAssertions,
   };

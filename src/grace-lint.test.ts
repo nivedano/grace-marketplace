@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "bun:test";
 
 import { projectSlug } from "./grace4/run-log-store";
+import { writeSegmentedGrace4Project } from "./grace4/test-fixtures";
 import { formatTextReport, lintGraceProject, parseCommandTimeoutMs, parseKeepRuns, resolveCommandVerbosity } from "./grace-lint";
 import { getLintIssueGuide } from "./lint/catalog";
 import { resolveRunLogRetention } from "./lint/config";
@@ -849,5 +850,45 @@ describe("run-commands CLI flag resolution", () => {
     expect(resolveCommandVerbosity({ ...base, format: "text", interactive: true })).toBe("live");
     expect(resolveCommandVerbosity({ ...base, format: "text" })).toBe("compact");
     expect(() => resolveCommandVerbosity({ format: "text", verbose: true, quiet: true, interactive: false })).toThrow();
+  });
+});
+
+describe("scenario evidence lint", () => {
+  it("an existing fixture project gets no new issues", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    // Tokens whose entry part names no V-M-* entry are ignored, so legacy projects stay clean.
+    writeProjectFile(root, "src/notes.ts", "// SC-UNRELATED-001 and SC-EXAMPLE-002-003 name no entry.\n");
+    const segmented = createProject();
+    writeSegmentedGrace4Project(segmented);
+
+    for (const project of [root, segmented]) {
+      const result = await lintGraceProject(project);
+      expect(result.issues.map((issue) => issue.code)).toEqual([]);
+    }
+  });
+
+  it("reports scenario id codes through lint and documents them in the catalog", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeProjectFile(
+      root,
+      ".grace/verification/main.xml",
+      `<GraceVerificationDocument graceVersion="4.0"><VD-MAIN><V-M-EXAMPLE><Command>bun test src/example.test.ts</Command><Scenario><SC-EXAMPLE-001 />example works</Scenario><Scenario><SC-EXAMPLE-001 /><SC-EXAMPLE-002 />twice</Scenario><Marker>[Example][run][BLOCK_RUN]</Marker></V-M-EXAMPLE></VD-MAIN></GraceVerificationDocument>`,
+    );
+    writeProjectFile(root, "src/example.test.ts", `import { expect, test } from "bun:test";\ntest("SC-EXAMPLE-009 example", () => expect(1).toBe(1));\n`);
+
+    const codes = (await lintGraceProject(root)).issues.map((issue) => issue.code).sort();
+    expect(codes).toEqual([
+      "verification.scenario-dangling-reference",
+      "verification.scenario-duplicate-id",
+      "verification.scenario-invalid-id",
+    ]);
+
+    for (const code of ["verification.scenario-duplicate-id", "verification.scenario-invalid-id", "verification.scenario-dangling-reference"]) {
+      expect(getLintIssueGuide(code).title).toContain("Scenario");
+      expect(getLintIssueGuide(code).explanation).not.toContain("does not yet have a dedicated explanation");
+    }
+    expect(getLintIssueGuide("verification.other").title).toContain("Verification");
   });
 });

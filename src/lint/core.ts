@@ -6,6 +6,7 @@ import { formatDuration, runDeclaredCommands, type CommandRunResult, type Declar
 import { validateGrace4Project } from "../grace4/grammar";
 import { detectGraceProjectKind, formatGrace3MigrationGuidance, resolveGrace4Paths } from "../grace4/project";
 import { buildGraphProjection, buildVerificationProjection, type GraphProjection, type VerificationProjection } from "../grace4/projections";
+import { collectScenarioEvidence } from "../grace4/scenario-evidence";
 import { collectActiveChangeScopes, createDurableOwnershipIndex, detectScopeOverlaps, detectUnsafeConcurrentExecution } from "../grace4/scope";
 import { ANCHOR_PATTERNS, type Grace4Issue, type Grace4ProjectPaths } from "../grace4/types";
 import { readGraceXmlArtifact } from "../grace4/xml";
@@ -73,13 +74,14 @@ function reportUnreadableDirectory(result: LintResult): UnreadableDirectoryHandl
   };
 }
 
-function validateGovernedFiles(result: LintResult, root: string): void {
+/** Lints governed files and returns every walked code file, which the scenario evidence scan reuses. */
+function validateGovernedFiles(result: LintResult, root: string): string[] {
   const { config, issues } = loadGraceLintConfig(root);
   for (const configIssue of issues) {
     addIssue(result, configIssue);
   }
   if (issues.some((issue) => issue.severity === "error")) {
-    return;
+    return [];
   }
 
   const files = collectCodeFiles(root, [".grace", ...(config?.ignoredDirs ?? [])], root, reportUnreadableDirectory(result));
@@ -94,6 +96,7 @@ function validateGovernedFiles(result: LintResult, root: string): void {
       addIssue(result, issue);
     }
   }
+  return files;
 }
 
 function readText(file: string) {
@@ -366,7 +369,7 @@ export async function lintGraceProject(projectRoot: string, options: LintOptions
     return finalizeResult(result);
   }
 
-  validateGovernedFiles(result, root);
+  const codeFiles = validateGovernedFiles(result, root);
 
   const paths = resolveGrace4Paths(root);
   const validation = validateGrace4Project(root);
@@ -378,6 +381,9 @@ export async function lintGraceProject(projectRoot: string, options: LintOptions
   const graph = buildGraphProjection(paths);
   const verification = buildVerificationProjection(paths, graph);
   for (const issue of [...graph.issues, ...verification.issues]) {
+    addGrace4Issue(result, issue);
+  }
+  for (const issue of collectScenarioEvidence(root, verification, codeFiles).issues) {
     addGrace4Issue(result, issue);
   }
 

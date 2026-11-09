@@ -5,7 +5,7 @@ import { describe, expect, it } from "bun:test";
 
 import { resolveGrace4Paths } from "./project";
 import { buildGraphProjection, buildVerificationProjection } from "./projections";
-import { symlinksUnsupported } from "./test-fixtures";
+import { symlinksUnsupported, writeMinimalGrace4Project } from "./test-fixtures";
 
 function createProject() {
   const root = path.join(os.tmpdir(), `grace4-projections-${crypto.randomUUID()}`);
@@ -397,5 +397,49 @@ describe("GRACE 4 graph and verification projections", () => {
     const verification = buildVerificationProjection(paths, graph);
     expect(issueCodes(verification.issues)).toContain("projection.verification.invalid-cwd");
     expect(issueCodes(verification.issues).filter((code) => code === "projection.verification.invalid-test-file")).toHaveLength(2);
+  });
+
+  it("legacy scenario text is byte-identical to before", () => {
+    // Expected strings were captured from the pre-change `scenarios` output; they must never drift.
+    const minimal = createProject();
+    writeMinimalGrace4Project(minimal);
+    const minimalPaths = resolveGrace4Paths(minimal);
+    const minimalEntry = buildVerificationProjection(minimalPaths, buildGraphProjection(minimalPaths)).entries.get("V-M-EXAMPLE");
+    expect(minimalEntry?.scenarios).toEqual(["Example works."]);
+    expect(minimalEntry?.scenarioRecords).toEqual([{ id: null, text: "Example works.", manualEvidence: null }]);
+
+    const rich = createProject();
+    writeMinimalGrace4Project(rich);
+    writeProjectFile(
+      rich,
+      ".grace/verification/main.xml",
+      `<GraceVerificationDocument graceVersion="4.0"><VD-MAIN><V-M-EXAMPLE><Command>bun test src/example.test.ts</Command><Scenario>  Boot logs
+   every stage <Code>init()</Code> then <Note>ready <Em>now</Em></Note> done.  </Scenario><Scenarios><Scenario>Nested scenario.</Scenario></Scenarios><Scenario>   </Scenario><Scenario><Step>only child</Step></Scenario><Marker>[Example][run][BLOCK_RUN]</Marker></V-M-EXAMPLE></VD-MAIN></GraceVerificationDocument>`,
+    );
+    const richPaths = resolveGrace4Paths(rich);
+    const richEntry = buildVerificationProjection(richPaths, buildGraphProjection(richPaths)).entries.get("V-M-EXAMPLE");
+    expect(richEntry?.scenarios).toEqual(["Boot logs every stage then done. Code init() Note ready Em now", "Nested scenario.", "Step only child"]);
+    expect(richEntry?.scenarioRecords.map((record) => record.id)).toEqual([null, null, null]);
+  });
+
+  it("id-bearing scenario text excludes the id and ManualEvidence", () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeProjectFile(
+      root,
+      ".grace/verification/main.xml",
+      `<GraceVerificationDocument graceVersion="4.0"><VD-MAIN><V-M-EXAMPLE><Command>bun test src/example.test.ts</Command><Scenario><SC-EXAMPLE-001 />A clean boot logs every stage <Code>init()</Code>.<ManualEvidence>Boot log read off the device.</ManualEvidence></Scenario><Scenario><SC-EXAMPLE-002 />Second scenario.</Scenario><Scenario>Legacy scenario.</Scenario><Marker>[Example][run][BLOCK_RUN]</Marker></V-M-EXAMPLE></VD-MAIN></GraceVerificationDocument>`,
+    );
+    const paths = resolveGrace4Paths(root);
+    const verification = buildVerificationProjection(paths, buildGraphProjection(paths));
+    const entry = verification.entries.get("V-M-EXAMPLE");
+
+    expect(verification.issues).toHaveLength(0);
+    expect(entry?.scenarioRecords).toEqual([
+      { id: "SC-EXAMPLE-001", text: "A clean boot logs every stage . Code init()", manualEvidence: "Boot log read off the device." },
+      { id: "SC-EXAMPLE-002", text: "Second scenario.", manualEvidence: null },
+      { id: null, text: "Legacy scenario.", manualEvidence: null },
+    ]);
+    expect(entry?.scenarios).toEqual(["A clean boot logs every stage . Code init()", "Second scenario.", "Legacy scenario."]);
   });
 });

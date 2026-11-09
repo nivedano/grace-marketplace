@@ -11,9 +11,11 @@ export type ModuleInterfaceItem = {
 };
 
 export type VerificationScenario = {
+  /** The SC-* id when the scenario has one, otherwise `Scenario-<position>`. */
   tag: string;
   kind?: string;
   text: string;
+  manualEvidence: string | null;
 };
 
 export type ModuleVerificationRecord = {
