@@ -39,10 +39,10 @@ Produce `plan.xml` from `references/change-plan-template.xml` as draft unless th
 </command_phase_rules>
 
 <observed_scope_derivation>
-- For every production file the plan writes, look up four kinds of related file: the tests that exercise it, the test doubles and fakes that stand in for it, the files that re-export it, and the composition or registration points that wire it.
-- Add each related file to `ObservedWriteScope`, or leave it out and record a one-line reason in the plan's `IntentSummary`.
+- For each production `File` in `ObservedWriteScope`, look up four kinds of related file: the tests that exercise it, the test doubles and fakes that stand in for it, the files that re-export it, and the composition or registration points that register it.
+- Add each related file to `ObservedWriteScope`, or leave it out and record one line per excluded file in `IntentSummary`, naming the file and the reason.
 - Prefer exact `File` entries; use a `Glob` only for a test directory the change owns as a whole.
-- Run the lookup with the project's own navigation: `grace module find`, `grace file show`, imports, and search.
+- Run the lookup with the project's own navigation: `grace module show <M-*> --with verification` for the entry's `<TestFiles>`, `grace module find`, `grace file show`, imports, and search.
 </observed_scope_derivation>
 
 <validation>

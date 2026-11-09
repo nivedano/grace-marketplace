@@ -22,10 +22,12 @@ describe("grace-plan observed scope derivation contract", () => {
     expect(validationStart).toBeGreaterThan(blockEnd);
 
     const block = plan.slice(blockStart, blockEnd);
-    for (const category of ["tests", "test doubles", "re-export", "wire"]) {
+    expect(block).toContain("For each production `File` in `ObservedWriteScope`");
+    for (const category of ["tests", "test doubles", "re-export", "registration points"]) {
       expect(block).toContain(category);
     }
-    expect(block).toContain("one-line reason");
+    expect(block).toContain("one line per excluded file in `IntentSummary`, naming the file and the reason");
+    expect(block).toContain("`grace module show <M-*> --with verification`");
   });
 
   it("keeps the packaged grace-plan skill identical to the canonical copy", () => {
