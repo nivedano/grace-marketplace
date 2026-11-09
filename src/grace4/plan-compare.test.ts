@@ -151,13 +151,47 @@ describe("scopeIsSuperset", () => {
 });
 
 describe("isPlanAmendment", () => {
+  const plain = parse(plan());
+
   it("accepts only ImplementationPlan and IntentSummary differences", () => {
-    expect(isPlanAmendment(["ImplementationPlan"])).toBe(true);
-    expect(isPlanAmendment(["IntentSummary", "ImplementationPlan"])).toBe(true);
-    expect(isPlanAmendment([])).toBe(false);
+    expect(isPlanAmendment(["ImplementationPlan"], plain, plain)).toBe(true);
+    expect(isPlanAmendment(["IntentSummary", "ImplementationPlan"], plain, plain)).toBe(true);
+    expect(isPlanAmendment([], plain, plain)).toBe(false);
     for (const gate of ["BaselineAssertions", "TargetAssertions", "DurableScope", "root", "wrapper", "unparseable", "Notes"]) {
-      expect(isPlanAmendment([gate])).toBe(false);
-      expect(isPlanAmendment(["ImplementationPlan", gate])).toBe(false);
+      expect(isPlanAmendment([gate], plain, plain)).toBe(false);
+      expect(isPlanAmendment(["ImplementationPlan", gate], plain, plain)).toBe(false);
     }
+  });
+
+  it("rejects a differing amendable section that holds a gate section at any depth in either version", () => {
+    for (const gate of ["BaselineAssertions", "TargetAssertions", "DurableScope", "ObservedWriteScope"]) {
+      const nested = parse(plan({ implementation: `<T-001>first<Notes><${gate}><A-9>x</A-9></${gate}></Notes></T-001>` }));
+      expect(comparePlansIgnoringObservedScope(plain, nested).sections).toEqual(["ImplementationPlan"]);
+      expect(isPlanAmendment(["ImplementationPlan"], plain, nested)).toBe(false);
+      expect(isPlanAmendment(["ImplementationPlan"], nested, plain)).toBe(false);
+    }
+    const edited = parse(plan({ implementation: "<T-001>second</T-001>" }));
+    expect(isPlanAmendment(["ImplementationPlan"], plain, edited)).toBe(true);
+  });
+});
+
+describe("comparePlansIgnoringObservedScope wrapper order", () => {
+  it("reports a reorder of wrapper children as wrapper even when another section differs", () => {
+    const left = parse(plan());
+    const right = parse(
+      `<GraceChangePlan graceVersion="4.0" status="approved"><C-ONE>`
+        + `<ImplementationPlan><T-001>second</T-001></ImplementationPlan>`
+        + `<TargetAssertions><A-1>one</A-1></TargetAssertions>`
+        + `<DurableScope><GraphAnchors><M-ONE /></GraphAnchors></DurableScope>`
+        + `<ObservedWriteScope><File>src/a.ts</File></ObservedWriteScope>`
+        + `</C-ONE></GraceChangePlan>`,
+    );
+    expect(comparePlansIgnoringObservedScope(left, right)).toEqual({ equal: false, sections: ["ImplementationPlan", "wrapper"] });
+  });
+
+  it("does not report wrapper for an added section with the common order kept", () => {
+    const left = parse(plan());
+    const right = parse(plan().replace("</C-ONE>", "<Notes>n</Notes></C-ONE>"));
+    expect(comparePlansIgnoringObservedScope(left, right)).toEqual({ equal: false, sections: ["Notes"] });
   });
 });

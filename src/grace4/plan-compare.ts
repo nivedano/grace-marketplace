@@ -17,7 +17,8 @@ const OBSERVED_WRITE_SCOPE_TAG = "ObservedWriteScope";
  * trim and plan XML is not mixed content, so formatting whitespace carries no meaning.
  *
  * sections lists the differing direct children of the wrapper by tag name, "wrapper" when the wrapper itself
- * (tag, attributes, text, or the order of its children) differs, and "root" when the root differs.
+ * (tag, attributes, text, or the order of the children both versions share) differs, even alongside other
+ * differing sections, and "root" when the root differs.
  */
 export function comparePlansIgnoringObservedScope(left: GraceXmlNode, right: GraceXmlNode): PlanComparison {
   const sections: string[] = [];
@@ -62,7 +63,8 @@ export function comparePlansIgnoringObservedScope(left: GraceXmlNode, right: Gra
       add(tag);
     }
   }
-  if (sections.length === 0 && !sameTagSequence(leftChildren, rightChildren)) {
+  // A reorder of the children both versions share is always reported, so it cannot hide behind another difference.
+  if (!sameCommonOrder(leftChildren, rightChildren)) {
     add("wrapper");
   }
 
@@ -72,12 +74,26 @@ export function comparePlansIgnoringObservedScope(left: GraceXmlNode, right: Gra
 /** Plan sections that an approved plan may amend in place; every other section is a gate. */
 export const AMENDABLE_PLAN_SECTIONS: readonly string[] = ["ImplementationPlan", "IntentSummary"];
 
+/** Gate sections that the assertion and scope readers find at any depth of a plan. */
+const NESTABLE_GATE_SECTIONS: readonly string[] = ["BaselineAssertions", "TargetAssertions", "DurableScope", "ObservedWriteScope"];
+
 /**
- * Returns true when a non-empty list of differing sections names only amendable sections. Any other section,
+ * Returns true when a non-empty list of differing sections, compared between plan roots left and right, names only
+ * amendable sections and no such section holds a gate section at any depth in either version. Any other section,
  * including "root", "wrapper", "unparseable" and unknown tags, makes the difference a mutation.
  */
-export function isPlanAmendment(sections: readonly string[]): boolean {
-  return sections.length > 0 && sections.every((section) => AMENDABLE_PLAN_SECTIONS.includes(section));
+export function isPlanAmendment(sections: readonly string[], left: GraceXmlNode, right: GraceXmlNode): boolean {
+  if (sections.length === 0 || !sections.every((section) => AMENDABLE_PLAN_SECTIONS.includes(section))) {
+    return false;
+  }
+  const sectionNodes = [findWrapper(left), findWrapper(right)]
+    .flatMap((wrapper) => wrapper?.children ?? [])
+    .filter((child) => sections.includes(child.tag));
+  return !sectionNodes.some((node) => node.children.some(holdsGateSection));
+}
+
+function holdsGateSection(node: GraceXmlNode): boolean {
+  return NESTABLE_GATE_SECTIONS.includes(node.tag) || node.children.some(holdsGateSection);
 }
 
 /** Returns true when every file and every glob of narrower appears in wider by exact normalized string equality. */
@@ -108,8 +124,13 @@ function orderedTags(left: GraceXmlNode[], right: GraceXmlNode[]): string[] {
   return [...new Set([...left, ...right].map((child) => child.tag))];
 }
 
-function sameTagSequence(left: GraceXmlNode[], right: GraceXmlNode[]): boolean {
-  return left.length === right.length && left.every((child, index) => child.tag === right[index]!.tag);
+/** Compares the tag order of the children whose tags appear in both lists. */
+function sameCommonOrder(left: GraceXmlNode[], right: GraceXmlNode[]): boolean {
+  const leftTags = new Set(left.map((child) => child.tag));
+  const rightTags = new Set(right.map((child) => child.tag));
+  const leftCommon = left.filter((child) => rightTags.has(child.tag));
+  const rightCommon = right.filter((child) => leftTags.has(child.tag));
+  return leftCommon.length === rightCommon.length && leftCommon.every((child, index) => child.tag === rightCommon[index]!.tag);
 }
 
 function sameAttributes(left: Record<string, string>, right: Record<string, string>): boolean {

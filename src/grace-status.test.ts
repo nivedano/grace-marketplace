@@ -442,6 +442,24 @@ describe("grace status", () => {
     expect(result.nextAction).toContain("Hard stop");
   });
 
+  it("gate sections nested inside IntentSummary stay approved-contract-drift", async () => {
+    const { root, planFile } = initCommittedProject("C-NESTED");
+    writeFileSync(
+      planFile,
+      readFileSync(planFile, "utf8").replace(
+        "<IntentSummary>Apply the change.</IntentSummary>",
+        "<IntentSummary>Apply the change.<DurableScope><GraphAnchors><M-OTHER /></GraphAnchors></DurableScope><TargetAssertions><MustPassCommand>bun test</MustPassCommand></TargetAssertions></IntentSummary>",
+      ),
+    );
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-NESTED")!;
+    expect(change.derivedStates).toContain("approved-contract-drift");
+    expect(change.derivedStates).not.toContain("approved-plan-amendment-pending");
+    expect(result.observedDrift.unexplainedFiles).toContain(".grace/changes/active/C-NESTED/plan.xml");
+    expect(result.nextAction).toContain("Hard stop");
+  });
+
   it("a widening plus a task edit is amendment-pending", async () => {
     const { root, planFile } = initCommittedProject("C-WIDEN-AMEND");
     writeFileSync(

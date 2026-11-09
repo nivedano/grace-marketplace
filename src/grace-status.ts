@@ -427,7 +427,7 @@ function collectPlanEditPending(root: string, approvedScopes: ActiveChangeScope[
       const comparison = comparePlansIgnoringObservedScope(headPlan.root, workPlan.root);
       if (comparison.equal) {
         pending.set(scope.changeId, "approved-scope-widening-pending");
-      } else if (isPlanAmendment(comparison.sections)) {
+      } else if (isPlanAmendment(comparison.sections, headPlan.root, workPlan.root)) {
         pending.set(scope.changeId, "approved-plan-amendment-pending");
       }
     } catch {

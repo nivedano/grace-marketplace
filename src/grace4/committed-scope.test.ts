@@ -544,6 +544,39 @@ describe("checkCommittedScope", () => {
       expect(issues[0]!.message).toContain("TargetAssertions, ImplementationPlan");
     });
 
+    it("treats gate sections nested in IntentSummary or a task, and a gate reorder behind a task edit, as mutations", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      const base = plan(ID, "approved", ["src/a.ts"]);
+      const gates = "<DurableScope><GraphAnchors><M-OTHER /></GraphAnchors></DurableScope><TargetAssertions><MustPassCommand>bun test</MustPassCommand></TargetAssertions>";
+      const intentNested = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { intent: `Apply.${gates}` }) }, owned("docs: nest gates in intent"));
+      const intentRestored = commit(root, { [ACTIVE_PLAN]: base }, owned("docs: restore intent"));
+      const taskNested = commit(
+        root,
+        { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { tasks: `<T-001><Title>Apply fixture change</Title>${gates}</T-001>` }) },
+        owned("docs: nest gates in a task"),
+      );
+      const taskRestored = commit(root, { [ACTIVE_PLAN]: base }, owned("docs: restore task"));
+      const plainEdit = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { tasks: "<T-001><Title>Plain edit</Title></T-001>" }) }, owned("docs: plain task edit"));
+      const swapped = plan(ID, "approved", ["src/a.ts"], { tasks: "<T-001><Title>Reordered</Title></T-001>" });
+      const lines = swapped.split("\n");
+      const baselineLine = lines.find((line) => line.includes("<BaselineAssertions>"))!;
+      const targetLine = lines.find((line) => line.includes("<TargetAssertions>"))!;
+      const reordered = lines.map((line) => (line === baselineLine ? targetLine : line === targetLine ? baselineLine : line)).join("\n");
+      const reorder = commit(root, { [ACTIVE_PLAN]: reordered }, owned("docs: reorder gates behind a task edit"));
+
+      const { issues, report } = check(root);
+      expect(report.mutations).toEqual([
+        { commit: short(intentNested), sections: ["IntentSummary"] },
+        { commit: short(intentRestored), sections: ["IntentSummary"] },
+        { commit: short(taskNested), sections: ["ImplementationPlan"] },
+        { commit: short(taskRestored), sections: ["ImplementationPlan"] },
+        { commit: short(reorder), sections: ["ImplementationPlan", "wrapper"] },
+      ]);
+      expect(report.amendments).toEqual([{ commit: short(plainEdit), sections: ["ImplementationPlan"] }]);
+      expect(issues.filter((issue) => issue.code === "scope.approved-plan-mutated")).toHaveLength(5);
+      expect(issues.filter((issue) => issue.code === "scope.approved-plan-amended")).toHaveLength(1);
+    });
+
     it("lists files matching committedScopeExempt under exempt and raises no issue for them", () => {
       const { root } = approvedRepo(["src/a.ts", ".beads/**"]);
       commit(root, { "src/a.ts": "a\n", ".beads/issues.jsonl": "1\n", "notes/draft.md": "d\n" }, owned("feat: write a with bookkeeping"));

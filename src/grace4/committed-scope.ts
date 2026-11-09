@@ -119,7 +119,7 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
         } else {
           const comparison = comparePlansIgnoringObservedScope(previous.root, current.root);
           if (!comparison.equal) {
-            const edits = isPlanAmendment(comparison.sections) ? history.amendments : history.mutations;
+            const edits = isPlanAmendment(comparison.sections, previous.root, current.root) ? history.amendments : history.mutations;
             edits.push({ commit: current.commit, sections: comparison.sections });
           }
         }
