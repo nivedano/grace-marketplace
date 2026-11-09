@@ -93,6 +93,8 @@ type CollectedObservedDrift = {
   planEditPending: Map<string, PlanEditPendingState>;
   /** Bundles at an approval or return moment against HEAD, by change id. */
   approvalMoments: Map<string, ApprovalMoment>;
+  /** Whether HEAD resolves, checked once for the run. */
+  headExists: boolean;
 };
 
 /** The uncommitted moments of the approval cycle, read against HEAD. */
@@ -270,7 +272,7 @@ export async function collectProjectStatus(
   ];
   const collectedDrift = collectObservedDrift(root, activeScopes, buildDriftRouteIndex(root, graph, verification), rawChanges);
   const observedDrift = collectedDrift.drift;
-  const approvedContractDrift = collectApprovedContractDrift(root, activeScopes, collectedDrift.trackedChangedFiles, collectedDrift.planEditPending, collectedDrift.approvalMoments);
+  const approvedContractDrift = collectApprovedContractDrift(root, activeScopes, rawChanges, collectedDrift);
   const changes = rawChanges.map((change) => {
     const moment = collectedDrift.approvalMoments.get(change.changeId);
     if (moment) {
@@ -423,7 +425,7 @@ function formatScenarioEvidenceText(report: ScenarioEvidenceReport): string[] {
 function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], routes: DriftRouteIndex, bundles: ChangeBundleStatus[]): CollectedObservedDrift {
   const statusResult = runGit(root, ["-c", "status.relativePaths=true", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]);
   if (statusResult.exitCode !== 0) {
-    return { drift: { available: false, changedFiles: [], explainedFiles: [], unexplainedFiles: [] }, trackedChangedFiles: new Set(), planEditPending: new Map(), approvalMoments: new Map() };
+    return { drift: { available: false, changedFiles: [], explainedFiles: [], unexplainedFiles: [] }, trackedChangedFiles: new Set(), planEditPending: new Map(), approvalMoments: new Map(), headExists: false };
   }
 
   const statusOutput = new TextDecoder().decode(statusResult.stdout);
@@ -448,6 +450,7 @@ function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], r
     trackedChangedFiles,
     planEditPending,
     approvalMoments,
+    headExists,
   };
 }
 
@@ -696,14 +699,31 @@ function buildDriftRouteIndex(root: string, graph: GraphProjection, verification
   return routes;
 }
 
-function collectApprovedContractDrift(root: string, activeScopes: ActiveChangeScope[], trackedChangedFiles: ReadonlySet<string>, planEditPending: ReadonlyMap<string, PlanEditPendingState>, approvalMoments: ReadonlyMap<string, ApprovalMoment>): Set<string> {
-  return new Set(activeScopes
+/**
+ * Finds the active bundles whose approved contract changed. Two sources, both outside a pending moment or a batch-1
+ * plan-edit pending state: an approved spec and plan in the working tree with either tracked-changed, and any bundle
+ * with a spec.xml or plan.xml approved in HEAD that is tracked-changed whatever its working-tree status, so a return
+ * or a draft-in-tree edit that changes content keeps the hard stop.
+ */
+function collectApprovedContractDrift(root: string, activeScopes: ActiveChangeScope[], bundles: ChangeBundleStatus[], collected: CollectedObservedDrift): Set<string> {
+  const { trackedChangedFiles, planEditPending, approvalMoments, headExists } = collected;
+  const drifted = new Set(activeScopes
     .filter((scope) => scope.specStatus === "approved" && scope.planStatus === "approved" && !planEditPending.has(scope.changeId) && !approvalMoments.has(scope.changeId))
     .filter((scope) => {
       const bundlePath = path.relative(root, scope.bundlePath).replaceAll(path.sep, "/");
       return trackedChangedFiles.has(`${bundlePath}/spec.xml`) || trackedChangedFiles.has(`${bundlePath}/plan.xml`);
     })
     .map((scope) => scope.changeId));
+  if (!headExists) return drifted;
+  for (const bundle of bundles) {
+    if (bundle.location !== "active" || planEditPending.has(bundle.changeId) || approvalMoments.has(bundle.changeId)) continue;
+    const bundlePath = bundle.path.replaceAll(path.sep, "/");
+    for (const artifact of ["spec.xml", "plan.xml"]) {
+      const file = `${bundlePath}/${artifact}`;
+      if (trackedChangedFiles.has(file) && readHeadStatus(root, file, true) === "approved") drifted.add(bundle.changeId);
+    }
+  }
+  return drifted;
 }
 
 function resolveFormat(format: unknown, json: unknown) {

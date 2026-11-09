@@ -817,6 +817,8 @@ describe("grace status", () => {
 
     const result = await collectProjectStatus(root);
     expect(result.observedDrift.unexplainedFiles).toContain(`${bundle}/plan.xml`);
+    expect(result.changes.find((change) => change.changeId === "C-RETURN")!.derivedStates).toContain("approved-contract-drift");
+    expect(result.nextAction.startsWith("Hard stop")).toBe(true);
   });
 
   it("does not explain a draft design-context while HEAD approves the plan", async () => {
@@ -1009,6 +1011,8 @@ describe("grace status", () => {
 
       const result = await collectProjectStatus(root);
       expect(statesOf(result, "C-RETEDIT")).not.toContain("return-pending-commit");
+      expect(statesOf(result, "C-RETEDIT")).toContain("approved-contract-drift");
+      expect(result.nextAction.startsWith("Hard stop")).toBe(true);
       expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETEDIT")}/plan.xml`);
       expect(result.derivedStates).toContain("unexplained-observed-drift");
     });
@@ -1021,6 +1025,8 @@ describe("grace status", () => {
 
       const result = await collectProjectStatus(root);
       expect(statesOf(result, "C-RETSPEC")).not.toContain("return-pending-commit");
+      expect(statesOf(result, "C-RETSPEC")).toContain("approved-contract-drift");
+      expect(result.nextAction.startsWith("Hard stop")).toBe(true);
       expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETSPEC")}/spec.xml`);
       expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETSPEC")}/plan.xml`);
     });
@@ -1032,6 +1038,8 @@ describe("grace status", () => {
 
       const result = await collectProjectStatus(root);
       expect(statesOf(result, "C-RETEDITSPEC")).not.toContain("return-pending-commit");
+      expect(statesOf(result, "C-RETEDITSPEC")).toContain("approved-contract-drift");
+      expect(result.nextAction.startsWith("Hard stop")).toBe(true);
       expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETEDITSPEC")}/spec.xml`);
       expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETEDITSPEC")}/plan.xml`);
     });
