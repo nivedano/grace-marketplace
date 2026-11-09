@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,7 +18,17 @@ function history(root: string): PlanHistory {
   if ("skipped" in result) {
     throw new Error(`history skipped: ${result.skipped}`);
   }
+  if ("failed" in result) {
+    throw new Error(`history failed: ${result.failed}`);
+  }
   return result;
+}
+
+/** Deletes one loose object so that git commands needing it fail, as with a damaged or partial clone. */
+function removeLooseObject(root: string, hash: string): void {
+  const file = path.join(root, ".git", "objects", hash.slice(0, 2), hash.slice(2));
+  chmodSync(file, 0o666);
+  rmSync(file);
 }
 
 function seeded(): string {
@@ -138,6 +148,24 @@ describe("readPlanHistory", () => {
     expect(result.wideningCommits).toEqual([{ commit: widening, added: ["src/c.ts"] }]);
     expect(result.reapprovalAdded).toEqual([]);
     expect(result.approvedScope).toEqual({ files: ["src/a.ts"], globs: [] });
+  });
+
+  it("records a re-approval whose gate sections differ from the last approved version", () => {
+    const root = seeded();
+    commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"]) }, "docs: approve");
+    const target = "<MustVerify><Module>M-OTHER</Module></MustVerify>";
+    const durable = "<GraphAnchors><M-OTHER /></GraphAnchors>";
+    commit(root, { [ACTIVE_PLAN]: plan(ID, "cancelled", ["src/a.ts"], { target }) }, "docs: cancel and edit target");
+    const gates = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { target, durable }) }, "docs: re-approve with new gates");
+    const tasks = "<T-001><Title>Reworked</Title></T-001>";
+    commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts"], { target, durable }) }, "docs: reopen");
+    commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { target, durable, tasks }) }, "docs: re-approve with new tasks");
+
+    const result = history(root);
+    expect(result.approvalPoints).toHaveLength(3);
+    expect(result.reapprovalChangedGates).toEqual([{ commit: gates, sections: ["TargetAssertions", "DurableScope"] }]);
+    expect(result.mutations).toEqual([]);
+    expect(result.amendments).toEqual([]);
   });
 
   it("records a widening commit with its added entries", () => {
@@ -612,6 +640,35 @@ describe("checkCommittedScope", () => {
       expect(issues[0]!.message).toContain("src/b.ts");
       expect(report.approved).toEqual(["src/b.ts"]);
     });
+
+    it("errors with scope.written-before-widening for a file written before the re-approval that admitted it", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts", "src/b.ts"]) }, owned("docs: reopen and add b"));
+      const early = commit(root, { "src/b.ts": "b\n", "src/a.ts": "a\n" }, owned("feat: write a and b during the gap"));
+      const reapproval = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts", "src/b.ts"]) }, owned("docs: re-approve"));
+
+      const { issues, report } = check(root);
+      expect(codes(issues)).toEqual([`warning:scope.reapproval-widened:${ACTIVE_PLAN}`, "error:scope.written-before-widening:src/b.ts"]);
+      expect(issues[1]!.message).toContain(short(reapproval));
+      expect(report.errors).toEqual([{ file: "src/b.ts", code: "scope.written-before-widening", commit: short(early) }]);
+      expect(report.approved).toEqual(["src/a.ts"]);
+    });
+
+    it("warns with scope.reapproval-changed-gates and lists the differing sections", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      const baseline = "<MustExist><Value>M-OTHER</Value></MustExist>";
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts"], { baseline }) }, owned("docs: reopen and edit baseline"));
+      const reapproval = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { baseline }) }, owned("docs: re-approve"));
+      commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+
+      const { issues, report } = check(root);
+      expect(codes(issues)).toEqual([`warning:scope.reapproval-changed-gates:${ACTIVE_PLAN}`]);
+      expect(issues[0]!.message).toContain("BaselineAssertions");
+      expect(issues[0]!.message).toContain(short(reapproval));
+      expect(report.reapprovalChangedGates).toEqual([{ commit: short(reapproval), sections: ["BaselineAssertions"] }]);
+      expect(report.mutations).toEqual([]);
+      expect(report.approved).toEqual(["src/a.ts"]);
+    });
   });
 
   describe("ownership and trailers", () => {
@@ -741,6 +798,40 @@ describe("checkCommittedScope", () => {
       expect(codes(issues)).toEqual([`warning:scope.committed-check-skipped:${ACTIVE_PLAN}`]);
       expect(issues[0]!.message).toContain("shallow");
       expect(report.skipped).toBe("shallow");
+    });
+
+    it("fails, not skips, when git refuses a project that has a .git", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+      writeFileSync(path.join(root, ".git", "HEAD"), "not a ref\n");
+
+      const { issues, report } = check(root);
+      expect(codes(issues)).toEqual([`error:scope.committed-check-failed:${ACTIVE_PLAN}`]);
+      expect(issues[0]!.message).toContain("git rev-parse");
+      expect(report.skipped).toBeUndefined();
+      expect(report.failed).toContain("git rev-parse");
+    });
+
+    it("fails when git cannot read a committed plan version", () => {
+      const { root, approval } = approvedRepo(["src/a.ts"]);
+      commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+      removeLooseObject(root, fixtureGit(root, ["rev-parse", `${approval}:${ACTIVE_PLAN}`]));
+
+      const { issues, report } = check(root);
+      expect(codes(issues)).toEqual([`error:scope.committed-check-failed:${ACTIVE_PLAN}`]);
+      expect(report.failed).toContain("git show");
+      expect(report.errors).toEqual([]);
+    });
+
+    it("fails when git cannot list the commit window", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      const write = commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+      removeLooseObject(root, fixtureGit(root, ["rev-parse", `${write}:src`]));
+
+      const { issues, report } = check(root);
+      expect(codes(issues)).toEqual([`error:scope.committed-check-failed:${ACTIVE_PLAN}`]);
+      expect(report.failed).toContain("git log");
+      expect(report.ownedCommits).toBe(0);
     });
 
     it("checks a change whose bundle is archived at HEAD", () => {

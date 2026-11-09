@@ -443,6 +443,10 @@ function formatCommittedScopeSection(report: CommittedScopeReport): string[] {
     lines.push(`  Skipped: ${report.skipped}`);
     return lines;
   }
+  if (report.failed) {
+    lines.push(`  Failed: ${report.failed}`);
+    return lines;
+  }
   lines.push(`  B: ${report.firstCommit ?? "none"}`, `  A: ${report.approvalCommit ?? "none"}`);
   if (report.approvalPoints.length > 0) {
     lines.push(`  Approval points: ${capInline(report.approvalPoints)}`);
@@ -453,6 +457,7 @@ function formatCommittedScopeSection(report: CommittedScopeReport): string[] {
     }
   };
   section("Re-approval additions", report.reapprovalAdded.map((entry) => `${entry.commit}: ${capInline(entry.added)}`));
+  section("Re-approval gate changes", report.reapprovalChangedGates.map((entry) => `${entry.commit}: ${capInline(entry.sections)}`));
   section("Mutations", report.mutations.map((entry) => `${entry.commit}: ${capInline(entry.sections)}`));
   section("Amendments", report.amendments.map((entry) => `${entry.commit}: ${capInline(entry.sections)}`));
   section("Widening commits", report.wideningCommits.map((entry) => `${entry.commit}: ${capInline(entry.added)}`));

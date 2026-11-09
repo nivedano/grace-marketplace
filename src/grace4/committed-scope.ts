@@ -35,6 +35,11 @@ export type PlanHistory = {
   wideningCommits: { commit: string; added: string[] }[];
   /** Entries a re-approval point added over the last approved version before its gap, minus earlier widening entries. */
   reapprovalAdded: { commit: string; added: string[] }[];
+  /**
+   * Re-approval points whose plan differs from the last approved version outside ObservedWriteScope in a gate section:
+   * anything but ImplementationPlan and IntentSummary, or an unparseable last approved version.
+   */
+  reapprovalChangedGates: { commit: string; sections: string[] }[];
   /** The scope at A plus reapprovalAdded entries. */
   approvedScope: ObservedWriteScope;
   /** The ObservedWriteScope of plan.xml at HEAD. */
@@ -45,7 +50,13 @@ export type PlanHistory = {
 /** Reason the history could not be read. */
 export type PlanHistorySkip = { skipped: "not-git" | "shallow" };
 
-type GitResult = { ok: boolean; stdout: string };
+/** A git command the check needs failed; failed names the command and carries git's stderr. */
+export type PlanHistoryFailure = { failed: string };
+
+type GitResult = { ok: boolean; stdout: string; stderr: string };
+
+/** Thrown by requireGit; checkCommittedScope turns it into scope.committed-check-failed. */
+class GitCommandFailed extends Error {}
 
 type LoadedVersion = PlanVersion & { root: GraceXmlNode | null };
 
@@ -53,16 +64,30 @@ const APPROVED = "approved";
 const ROOT_STATUS = /<GraceChangePlan\b[^>]*?\sstatus\s*=\s*["']([^"']*)["']/;
 
 /**
- * Reads the plan history of changeId from git, whatever the plan's status at HEAD. A project that is not a git
- * worktree, or a shallow clone in which earlier commits may be missing, is reported as skipped.
+ * Reads the plan history of changeId from git, whatever the plan's status at HEAD. A project with no .git at or above
+ * its root, or a shallow clone in which earlier commits may be missing, is reported as skipped. A git command that
+ * fails anywhere else, such as a dubious-ownership refusal, is reported as failed.
  */
-export function readPlanHistory(root: string, changeId: string): PlanHistory | PlanHistorySkip {
-  const inside = runGit(root, ["rev-parse", "--is-inside-work-tree"]);
-  if (!inside.ok || inside.stdout.trim() !== "true") {
+export function readPlanHistory(root: string, changeId: string): PlanHistory | PlanHistorySkip | PlanHistoryFailure {
+  try {
+    return readPlanHistoryOrThrow(root, changeId);
+  } catch (error) {
+    if (error instanceof GitCommandFailed) {
+      return { failed: error.message };
+    }
+    throw error;
+  }
+}
+
+function readPlanHistoryOrThrow(root: string, changeId: string): PlanHistory | PlanHistorySkip {
+  if (!hasGitAncestor(root)) {
     return { skipped: "not-git" };
   }
-  const shallow = runGit(root, ["rev-parse", "--is-shallow-repository"]);
-  if (!shallow.ok || shallow.stdout.trim() === "true") {
+  const inside = requireGit(root, ["rev-parse", "--is-inside-work-tree"]).trim();
+  if (inside !== "true") {
+    throw new GitCommandFailed(`git rev-parse --is-inside-work-tree printed "${inside}": the project root is not inside a git work tree.`);
+  }
+  if (requireGit(root, ["rev-parse", "--is-shallow-repository"]).trim() === "true") {
     return { skipped: "shallow" };
   }
 
@@ -83,6 +108,7 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
     amendments: [],
     wideningCommits: [],
     reapprovalAdded: [],
+    reapprovalChangedGates: [],
     approvedScope: emptyScope(),
     finalScope,
     shallow: false,
@@ -101,6 +127,8 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
   // Scope of the last parsed approved version: the base for both widenings and re-approvals, so entries added
   // during a non-approved gap surface at the re-approval rather than as a widening.
   let lastApprovedScope = approval.scope!;
+  // Last version with root status approved, parsed or not: the base a re-approval's gate sections are compared with.
+  let lastApproved: LoadedVersion = approval;
   for (let index = approvalIndex + 1; index < versions.length; index += 1) {
     const previous = versions[index - 1]!;
     const current = versions[index]!;
@@ -111,6 +139,10 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
       if (scopeEntries(added).length > 0) {
         history.reapprovalAdded.push({ commit: current.commit, added: scopeEntries(added) });
         history.approvedScope = scopeUnion(history.approvedScope, added);
+      }
+      const gates = changedGateSections(lastApproved, current);
+      if (gates.length > 0) {
+        history.reapprovalChangedGates.push({ commit: current.commit, sections: gates });
       }
     } else {
       if (maybeApproved(previous) && maybeApproved(current)) {
@@ -136,9 +168,24 @@ export function readPlanHistory(root: string, changeId: string): PlanHistory | P
     if (current.scope && current.status === APPROVED) {
       lastApprovedScope = current.scope;
     }
+    if (current.status === APPROVED) {
+      lastApproved = current;
+    }
   }
 
   return history;
+}
+
+/** Sections in which a re-approval differs from the last approved version, unless every difference is an amendment. */
+function changedGateSections(lastApproved: LoadedVersion, reapproval: LoadedVersion): string[] {
+  if (!lastApproved.root || !reapproval.root) {
+    return ["unparseable"];
+  }
+  const comparison = comparePlansIgnoringObservedScope(lastApproved.root, reapproval.root);
+  if (comparison.equal || isPlanAmendment(comparison.sections, lastApproved.root, reapproval.root)) {
+    return [];
+  }
+  return comparison.sections;
 }
 
 /** Result of the committed-scope check for one change. Commit fields are 7-character short hashes except B and A. */
@@ -148,6 +195,8 @@ export type CommittedScopeReport = {
   approvalCommit: string | null;
   approvalPoints: string[];
   reapprovalAdded: { commit: string; added: string[] }[];
+  /** Re-approval points whose gate sections differ from the last approved version. */
+  reapprovalChangedGates: { commit: string; sections: string[] }[];
   mutations: { commit: string; sections: string[] }[];
   amendments: { commit: string; sections: string[] }[];
   wideningCommits: { commit: string; added: string[] }[];
@@ -160,8 +209,10 @@ export type CommittedScopeReport = {
   /** Owned-commit files matching a committedScopeExempt glob, sorted; they get no other class. */
   exempt: string[];
   errors: { file: string; code: string; commit: string }[];
-  /** Set when the history could not be read: not a git worktree, or a shallow clone. */
+  /** Set when the history could not be read: no .git at or above the root, or a shallow clone. */
   skipped?: "not-git" | "shallow";
+  /** Set when a git command the check needs failed: the command and git's stderr. */
+  failed?: string;
 };
 
 /**
@@ -197,15 +248,29 @@ export function checkCommittedScope(
   changeId: string,
   options: CommittedScopeOptions,
 ): { issues: Grace4Issue[]; report: CommittedScopeReport } {
+  try {
+    return checkOrThrow(root, changeId, options);
+  } catch (error) {
+    if (!(error instanceof GitCommandFailed)) {
+      throw error;
+    }
+    const report = emptyReport(changeId);
+    report.failed = error.message;
+    const message = `Committed-scope check for ${changeId} could not run: ${error.message}`;
+    return { issues: [issue("error", "scope.committed-check-failed", currentPlanFile(root, changeId), message)], report };
+  }
+}
+
+function checkOrThrow(root: string, changeId: string, options: CommittedScopeOptions): { issues: Grace4Issue[]; report: CommittedScopeReport } {
   const planFile = currentPlanFile(root, changeId);
   const report = emptyReport(changeId);
   const issues: Grace4Issue[] = [];
 
-  const history = readPlanHistory(root, changeId);
+  const history = readPlanHistoryOrThrow(root, changeId);
   if ("skipped" in history) {
     report.skipped = history.skipped;
     const reason = history.skipped === "not-git"
-      ? "the project is not a git worktree"
+      ? "the project is not a git worktree (no .git at or above its root)"
       : "the repository is a shallow clone, so earlier commits may be missing";
     issues.push(issue("warning", "scope.committed-check-skipped", planFile, `Committed-scope check for ${changeId} skipped: ${reason}.`));
     return { issues, report };
@@ -220,6 +285,7 @@ export function checkCommittedScope(
 
   report.approvalPoints = history.approvalPoints.map(short);
   report.reapprovalAdded = history.reapprovalAdded.map((entry) => ({ commit: short(entry.commit), added: entry.added }));
+  report.reapprovalChangedGates = history.reapprovalChangedGates.map((entry) => ({ commit: short(entry.commit), sections: entry.sections }));
   report.mutations = history.mutations.map((entry) => ({ commit: short(entry.commit), sections: entry.sections }));
   report.amendments = history.amendments.map((entry) => ({ commit: short(entry.commit), sections: entry.sections }));
   report.wideningCommits = history.wideningCommits.map((entry) => ({ commit: short(entry.commit), added: entry.added }));
@@ -242,6 +308,14 @@ export function checkCommittedScope(
   for (const entry of history.reapprovalAdded) {
     issues.push(issue("warning", "scope.reapproval-widened", planFile, `Re-approval ${short(entry.commit)} of ${changeId} added scope entries: ${entry.added.join(", ")}.`));
   }
+  for (const entry of history.reapprovalChangedGates) {
+    issues.push(issue(
+      "warning",
+      "scope.reapproval-changed-gates",
+      planFile,
+      `Re-approval ${short(entry.commit)} of ${changeId} changed gate sections relative to the last approved version: ${entry.sections.join(", ")}.`,
+    ));
+  }
 
   const rule = new PathRule();
   const window = readWindow(root, history.firstCommit);
@@ -251,6 +325,13 @@ export function checkCommittedScope(
   const isGrace = (file: string) => rule.within(file, ".grace");
   const exemptScope: ObservedWriteScope = { files: [], globs: options.exempt ?? [] };
   const isExempt = (file: string) => observedWriteScopeContains(exemptScope, file);
+  const scopeAtApproval = history.versions.find((version) => version.commit === history.approvalCommit)?.scope ?? emptyScope();
+  // Re-approval admissions in history order; the first one that matches a file is the one that admitted it.
+  const reapprovals = history.reapprovalAdded.map((entry) => ({
+    hash: entry.commit,
+    index: position.get(entry.commit) ?? -1,
+    scope: entriesToScope(entry.added),
+  }));
 
   // Earliest owned write of each file, in topological order.
   const earliest = new Map<string, { file: string; index: number; hash: string }>();
@@ -297,6 +378,18 @@ export function checkCommittedScope(
       continue;
     }
     if (observedWriteScopeContains(history.approvedScope, file)) {
+      const reapproval = observedWriteScopeContains(scopeAtApproval, file)
+        ? undefined
+        : reapprovals.find((entry) => observedWriteScopeContains(entry.scope, file));
+      if (reapproval && index < reapproval.index) {
+        fail(
+          file,
+          "scope.written-before-widening",
+          hash,
+          `${file} was first written by ${short(hash)}, before re-approval ${short(reapproval.hash)} of ${changeId} that admitted it.`,
+        );
+        continue;
+      }
       report.approved.push(file);
       continue;
     }
@@ -377,8 +470,8 @@ export function checkCommittedScope(
 /** Reads the window B^..HEAD oldest first in topological order; with no B^ the window has no lower bound. */
 function readWindow(root: string, firstCommit: string): WindowCommit[] {
   const range = windowRange(root, firstCommit);
-  const prefix = runGit(root, ["rev-parse", "--show-prefix"]).stdout.trim();
-  const listed = runGit(root, [
+  const prefix = requireGit(root, ["rev-parse", "--show-prefix"]).trim();
+  const listed = requireGit(root, [
     "log",
     "-z",
     "--no-renames",
@@ -389,11 +482,8 @@ function readWindow(root: string, firstCommit: string): WindowCommit[] {
     range,
     "--",
   ]);
-  if (!listed.ok) {
-    return [];
-  }
   const commits: WindowCommit[] = [];
-  for (const record of listed.stdout.split("\x1e").slice(1)) {
+  for (const record of listed.split("\x1e").slice(1)) {
     const [hash = "", parents = "", trailers = "", ...names] = record.split("\0");
     const merge = parents.trim().split(" ").filter(Boolean).length > 1;
     const files = merge ? firstParentDiff(root, hash) : names.map((name, index) => (index === 1 ? name.replace(/^\n/, "") : name));
@@ -412,8 +502,7 @@ function windowRange(root: string, firstCommit: string): string {
 }
 
 function firstParentDiff(root: string, hash: string): string[] {
-  const diff = runGit(root, ["diff", "-z", "--no-renames", "--name-only", `${hash}^1`, hash]);
-  return diff.ok ? diff.stdout.split("\0").filter(Boolean) : [];
+  return requireGit(root, ["diff", "-z", "--no-renames", "--name-only", `${hash}^1`, hash]).split("\0").filter(Boolean);
 }
 
 /** Turns repository-relative paths into project-relative ones and drops paths outside the project root. */
@@ -446,11 +535,11 @@ function ownedCommits(
 
 /** Test-only replay switch: window commits whose full message names changeId as a whole token. */
 function commitsMentioning(root: string, firstCommit: string, changeId: string): Set<string> {
-  const listed = runGit(root, ["log", "--format=%x1e%H%x00%B", windowRange(root, firstCommit), "--"]);
+  const listed = requireGit(root, ["log", "--format=%x1e%H%x00%B", windowRange(root, firstCommit), "--"]);
   const escaped = changeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`(^|[^A-Za-z0-9_-])${escaped}(?![A-Za-z0-9_-])`);
   const found = new Set<string>();
-  for (const record of listed.ok ? listed.stdout.split("\x1e").slice(1) : []) {
+  for (const record of listed.split("\x1e").slice(1)) {
     const [hash = "", message = ""] = record.split("\0");
     if (pattern.test(message)) {
       found.add(hash.trim());
@@ -495,6 +584,7 @@ function emptyReport(changeId: string): CommittedScopeReport {
     mutations: [],
     amendments: [],
     wideningCommits: [],
+    reapprovalChangedGates: [],
     ownedCommits: 0,
     untaggedInScope: [],
     untaggedOther: { count: 0, commits: [] },
@@ -514,13 +604,39 @@ function issue(severity: Grace4Issue["severity"], code: string, file: string, me
   return { severity, code, file, message };
 }
 
-/** The one git entry point of the committed-scope check. stdout is piped and decoded as UTF-8. */
+/** The one git entry point of the committed-scope check. stdout and stderr are piped and decoded as UTF-8. */
 function runGit(root: string, args: string[]): GitResult {
   try {
     const result = Bun.spawnSync({ cmd: ["git", ...args], cwd: root, stdout: "pipe", stderr: "pipe" });
-    return { ok: result.exitCode === 0, stdout: new TextDecoder().decode(result.stdout) };
-  } catch {
-    return { ok: false, stdout: "" };
+    const decoder = new TextDecoder();
+    return { ok: result.exitCode === 0, stdout: decoder.decode(result.stdout), stderr: decoder.decode(result.stderr) };
+  } catch (error) {
+    return { ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Runs git and returns stdout; throws GitCommandFailed with the command and git's stderr when git fails. */
+function requireGit(root: string, args: string[]): string {
+  const result = runGit(root, args);
+  if (!result.ok) {
+    const stderr = result.stderr.trim().split(/\r?\n/).slice(0, 3).join(" ");
+    throw new GitCommandFailed(`git ${args.join(" ")} failed${stderr ? `: ${stderr}` : ""}`);
+  }
+  return result.stdout;
+}
+
+/** True when the root or one of its ancestors holds a .git directory or file. */
+function hasGitAncestor(root: string): boolean {
+  let directory = path.resolve(root);
+  for (;;) {
+    if (existsSync(path.join(directory, ".git"))) {
+      return true;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      return false;
+    }
+    directory = parent;
   }
 }
 
@@ -530,25 +646,28 @@ function bundlePaths(changeId: string): string[] {
 
 /** Commits touching any of paths, oldest first. Paths are relative to root. */
 function listCommits(root: string, paths: string[]): string[] {
-  const result = runGit(root, ["log", "--reverse", "--topo-order", "-z", "--no-renames", "--format=%H", "--", ...paths]);
-  if (!result.ok) {
-    return [];
-  }
-  return result.stdout.split("\0").map((entry) => entry.trim()).filter(Boolean);
+  return requireGit(root, ["log", "--reverse", "--topo-order", "-z", "--no-renames", "--format=%H", "--", ...paths])
+    .split("\0")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
-/** Reads plan.xml at commit, active path first, then archive. Returns null when the plan exists at neither. */
+/**
+ * Reads plan.xml at commit, active path first, then archive. Returns null when the plan exists at neither; a git
+ * failure while listing or reading it throws.
+ */
 function loadVersion(root: string, changeId: string, commit: string): LoadedVersion | null {
-  for (const bundle of bundlePaths(changeId)) {
-    const relativePath = `${bundle}/plan.xml`;
-    const shown = runGit(root, ["show", `${commit}:./${relativePath}`]);
-    if (!shown.ok) {
+  const candidates = bundlePaths(changeId).map((bundle) => `${bundle}/plan.xml`);
+  const present = new Set(requireGit(root, ["ls-tree", "-z", "--name-only", commit, "--", ...candidates]).split("\0").filter(Boolean));
+  for (const relativePath of candidates) {
+    if (!present.has(relativePath)) {
       continue;
     }
+    const text = requireGit(root, ["show", `${commit}:./${relativePath}`]);
     const file = `${commit}:${relativePath}`;
-    const parsed = parseGraceXmlArtifact(file, shown.stdout);
+    const parsed = parseGraceXmlArtifact(file, text);
     if (!parsed.root) {
-      return { commit, status: ROOT_STATUS.exec(shown.stdout)?.[1] ?? "", scope: null, parsed: false, root: null };
+      return { commit, status: ROOT_STATUS.exec(text)?.[1] ?? "", scope: null, parsed: false, root: null };
     }
     return {
       commit,
