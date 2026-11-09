@@ -40,7 +40,8 @@ Example:
   </TestFiles>
   <Command>bun test src/chat/index.test.ts</Command>
   <Scenario><SC-CHATS-001 />Generated title is assigned only when the chat is still untitled.</Scenario>
-  <Scenario><SC-CHATS-002 />Ownership failure rejects the mutation.<ManualEvidence>Owner check against a staging database.</ManualEvidence></Scenario>
+  <Scenario><SC-CHATS-002 />Ownership failure rejects the mutation.</Scenario>
+  <Scenario><SC-CHATS-003 />A generated title fits the chat header on a phone screen.<ManualEvidence>Owner check on a physical phone.</ManualEvidence></Scenario>
   <Marker>[ChatDomain][setGeneratedTitleIfEmpty][BLOCK_ASSIGN_GENERATED_TITLE]</Marker>
 </V-M-CHATS>
 ```

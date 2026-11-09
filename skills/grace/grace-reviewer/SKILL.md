@@ -7,7 +7,7 @@ description: Review GRACE 4 integrity across .grace artifacts, active changes, s
 <review_checklist>
 - `.grace/context` artifacts are present and relevant.
 - `.grace/graph/index.xml` routes every graph anchor to the correct graph document.
-- Confirm every `<Scenario>` the change added or edited has an `SC-<entry>-NNN` id and reads `executable` or `manualOnly` in `grace status`. Report a finding for a `manualOnly` scenario that a `<Command>` could prove, and for a referenced test that no `<Command>` of its entry runs.
+- Confirm every `<Scenario>` the change added or edited has an `SC-<entry>-NNN` id and reads `executable` or `manualOnly` in `grace status --json` `scenarioEvidence`. Report a finding for a `manualOnly` scenario that a `<Command>` could prove, and for a referenced test that no `<Command>` of its entry runs.
 - `.grace/verification/index.xml` routes deterministic `V-M-*` entries and covers current modules.
 - Active change specs/plans use valid statuses for their location and exactly one `C-*` wrapper.
 - Baseline and target assertions are meaningful and not stale.

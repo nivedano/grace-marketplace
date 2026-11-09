@@ -50,12 +50,15 @@ describe("GRACE scenario evidence skill contracts", () => {
     const checklist = blockBetween(skill, "<review_checklist>", "</review_checklist>");
     const items = checklist.split("\n").filter((line) => line.startsWith("- "));
 
-    expect(items[2]).toContain("SC-<entry>-NNN");
-    expect(items[2]).toContain("`executable`");
-    expect(items[2]).toContain("`manualOnly`");
-    expect(items[2]).toContain("<Command>");
-    expect(items[1]).not.toContain("SC-");
-    expect(items[3]).not.toContain("SC-");
+    const scenarioIndex = items.findIndex((item) => item.includes("SC-"));
+    expect(scenarioIndex).toBeGreaterThan(0);
+    expect(items[scenarioIndex - 1]!.startsWith("- `.grace/graph/index.xml` routes every graph anchor")).toBe(true);
+    const scenario = items[scenarioIndex]!;
+    expect(scenario).toContain("SC-<entry>-NNN");
+    expect(scenario).toContain("`executable`");
+    expect(scenario).toContain("`manualOnly`");
+    expect(scenario).toContain("`grace status --json` `scenarioEvidence`");
+    expect(scenario).toContain("<Command>");
   });
 
   it("documents the status section and three codes", () => {
@@ -86,6 +89,8 @@ describe("GRACE scenario evidence skill contracts", () => {
     ]) {
       expect(block).toContain(required);
     }
+    expect(block).toContain("Scanned files are the code-extension files outside ignored directories plus the files in every entry's `<TestFiles>`");
+    expect(block).not.toContain("resolve each by");
   });
 
   it("explainer documents the SC- id and ManualEvidence", () => {
@@ -99,7 +104,10 @@ describe("GRACE scenario evidence skill contracts", () => {
 
     const example = blockBetween(doc, "## Module Verification Entry", "## Log-Driven Development");
     expect(example).toMatch(/<Scenario><SC-CHATS-001 \/>/);
-    expect(example).toContain("<ManualEvidence>");
+    const manual = example.split("\n").filter((line) => line.includes("<ManualEvidence>"));
+    expect(manual).toHaveLength(1);
+    expect(manual[0]).toContain("physical phone");
+    expect(example.split("\n").find((line) => line.includes("<SC-CHATS-001 />"))).not.toContain("<ManualEvidence>");
   });
 
   it("keeps the packaged skills identical to the canonical copies", () => {

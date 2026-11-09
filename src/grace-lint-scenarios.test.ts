@@ -118,6 +118,7 @@ describe("scenario evidence lint", () => {
       expect(text).toContain("VD-*");
       expect(text).toContain("wrapper");
       expect(text).toContain("index");
+      expect(text).not.toContain("SC-");
     }
   });
 });
