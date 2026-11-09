@@ -421,15 +421,6 @@ describe("grace archive committed-scope integration", () => {
       },
     },
     {
-      code: "scope.approval-uncommitted",
-      file: ACTIVE_PLAN,
-      build(root) {
-        commit(root, { [ACTIVE_SPEC]: spec(CHANGE_ID, "approved"), [ACTIVE_PLAN]: plan(CHANGE_ID, "draft", ["src/a.ts"]) }, owned("docs: draft"));
-        // Approved only in the working tree. The bundle is exempt from the clean-tree check, so the history check must catch it.
-        writeFileSync(path.join(root, ...ACTIVE_PLAN.split("/")), plan(CHANGE_ID, "approved", ["src/a.ts"]));
-      },
-    },
-    {
       code: "scope.no-owned-commits",
       file: ACTIVE_PLAN,
       build(root) {
@@ -464,6 +455,29 @@ describe("grace archive committed-scope integration", () => {
       expect(fixtureGit(root, ["diff", "--cached", "--name-only"])).toBe("");
     });
   }
+
+  it("refuses on scope.approval-uncommitted with the commit-and-rerun text, not the history text", async () => {
+    const root = seededProject();
+    commit(root, { [ACTIVE_SPEC]: spec(CHANGE_ID, "approved"), [ACTIVE_PLAN]: plan(CHANGE_ID, "draft", ["src/a.ts"]) }, owned("docs: draft"));
+    // Approved only in the working tree. The bundle is exempt from the clean-tree check, so the history check must catch it.
+    writeFileSync(path.join(root, ...ACTIVE_PLAN.split("/")), plan(CHANGE_ID, "approved", ["src/a.ts"]));
+    const logRoot = createLogRoot();
+    cleanRunAtHead(logRoot, root);
+    const planBefore = readFileSync(path.join(activeBundle(root), "plan.xml"), "utf8");
+
+    const error = await archiveChange(root, { changeId: CHANGE_ID, logRoot }).then(() => null, (thrown: unknown) => thrown as Error & { code?: string });
+
+    expect(error).not.toBeNull();
+    expect(error!.code).toBe("precondition-failed");
+    expect(error!.message).toContain("scope.approval-uncommitted");
+    expect(error!.message).toContain(ACTIVE_PLAN);
+    expect(error!.message).toContain("Commit the approved plan.xml, rerun the final gate, then run grace archive again.");
+    expect(error!.message).not.toContain("fixed in history");
+    expect(error!.message).not.toContain("rewriting unpublished history");
+    expect(existsSync(archivedBundle(root))).toBe(false);
+    expect(readFileSync(path.join(activeBundle(root), "plan.xml"), "utf8")).toBe(planBefore);
+    expect(fixtureGit(root, ["diff", "--cached", "--name-only"])).toBe("");
+  });
 
   it("archives with warnings only and carries committedScope in JSON and text", async () => {
     const root = seededProject();

@@ -388,6 +388,13 @@ function requireCommittedScope(root: string, changeId: string): { report: Commit
       + "Fix the git error and run grace archive again; nothing was written.",
     );
   }
+  // scope.approval-uncommitted is the only error a new commit clears; the check returns before classifying anything else.
+  if (errors.length > 0 && errors.every((entry) => entry.code === "scope.approval-uncommitted")) {
+    throw refuse(
+      `The committed-scope check for ${changeId} found no committed approval (scope.approval-uncommitted ${errors[0]!.file}). `
+      + "Commit the approved plan.xml, rerun the final gate, then run grace archive again. Nothing was written.",
+    );
+  }
   if (errors.length > 0) {
     const listed = errors.slice(0, REFUSAL_ISSUE_CAP).map((entry) => `${entry.code} ${entry.file}`);
     const more = errors.length > listed.length ? ` and ${errors.length - listed.length} more` : "";
