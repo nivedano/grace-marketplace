@@ -34,10 +34,12 @@ export type RunVcsIdentity = {
  * and rewritten once the run completes. `finishedAt` is null until then.
  */
 export type RunMeta = RunVcsIdentity & {
-  schemaVersion: "1.1.0";
+  schemaVersion: "1.2.0";
   tool: "grace-lint";
   changeId: string | null;
   assertionMode: string;
+  /** Status of the plan the run was selected for; null in meta.json written before schema 1.2.0 or without a selected plan. */
+  selectedPlanStatus?: "approved" | "draft" | null;
   projectRoot: string;
   slug: string;
   /** Pid of the process that wrote this meta; the liveness probe behind the `killed` status. */
@@ -49,7 +51,7 @@ export type RunMeta = RunVcsIdentity & {
 };
 
 /** Current meta.json schema; bumped when RunMeta gains fields or statuses. */
-export const RUN_META_SCHEMA_VERSION = "1.1.0" as const;
+export const RUN_META_SCHEMA_VERSION = "1.2.0" as const;
 
 /**
  * How many *prunable* run directories per project survive pruning after each run.

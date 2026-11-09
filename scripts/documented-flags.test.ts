@@ -300,7 +300,7 @@ describe("documented CLI flags", () => {
 
     // `--run-commands` in the docs must fold onto the CLI's `runCommands` arg.
     const lintFlags = [...(flagsByCommand.get("grace lint") ?? [])];
-    for (const flag of ["path", "change", "assertions", "runCommands", "parallelPreflight", "explain"]) {
+    for (const flag of ["path", "change", "assertions", "draft", "runCommands", "parallelPreflight", "explain"]) {
       expect(lintFlags).toContain(flag);
     }
     const statusFlags = [...(flagsByCommand.get("grace status") ?? [])];

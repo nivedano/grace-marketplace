@@ -192,7 +192,7 @@ describe("runDeclaredCommands logs", () => {
     const summary = await runDeclaredCommands(declared([printCommand("meta-ok")]), options);
     expect(summary.runDir).not.toBeNull();
     const meta = JSON.parse(await Bun.file(path.join(summary.runDir!, "meta.json")).text());
-    expect(meta.schemaVersion).toBe("1.1.0");
+    expect(meta.schemaVersion).toBe("1.2.0");
     expect(meta.status).toBe("passed");
     expect(meta.changeId).toBe("C-TEST");
     expect(meta.pid).toBe(process.pid);

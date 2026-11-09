@@ -85,7 +85,7 @@ describe("writeRunMeta", () => {
     const root = tempDir();
     try {
       const meta: RunMeta = {
-        schemaVersion: "1.1.0",
+        schemaVersion: "1.2.0",
         tool: "grace-lint",
         changeId: "C-TEST",
         assertionMode: "target",
@@ -222,7 +222,7 @@ function seedRun(parent: string, name: string, meta: Partial<RunMeta>): void {
   const dir = path.join(parent, name);
   mkdirSync(dir, { recursive: true });
   writeRunMeta(dir, {
-    schemaVersion: "1.1.0",
+    schemaVersion: "1.2.0",
     tool: "grace-lint",
     changeId: null,
     assertionMode: "target",
@@ -378,7 +378,7 @@ async function deadPid(): Promise<number> {
 
 function runningMeta(pid: number): RunMeta {
   return {
-    schemaVersion: "1.1.0",
+    schemaVersion: "1.2.0",
     tool: "grace-lint",
     changeId: "C-TEST",
     assertionMode: "target",
