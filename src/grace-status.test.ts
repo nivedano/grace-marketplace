@@ -340,6 +340,76 @@ describe("grace status", () => {
     expect(result.nextAction).toContain("Hard stop");
   });
 
+  function initCommittedProject(changeId: string) {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeChange(root, changeId, { specStatus: "approved", planStatus: "approved" });
+    runGit(root, ["init"]);
+    runGit(root, ["config", "user.email", "grace@example.test"]);
+    runGit(root, ["config", "user.name", "GRACE Test"]);
+    runGit(root, ["config", "commit.gpgsign", "false"]);
+    runGit(root, ["config", "core.hooksPath", "disabled-hooks"]);
+    runGit(root, ["add", "."]);
+    runGit(root, ["commit", "-m", "test: baseline"]);
+    return { root, planFile: path.join(root, `.grace/changes/active/${changeId}/plan.xml`) };
+  }
+
+  it("reports a scope-only widening as approved-scope-widening-pending, not drift", async () => {
+    const { root, planFile } = initCommittedProject("C-WIDEN");
+    writeFileSync(planFile, readFileSync(planFile, "utf8").replace("<File>src/example.ts</File>", "<File>src/example.ts</File><File>src/extra.ts</File>"));
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-WIDEN")!;
+    expect(result.observedDrift.explainedFiles).toContain(".grace/changes/active/C-WIDEN/plan.xml");
+    expect(result.observedDrift.unexplainedFiles).not.toContain(".grace/changes/active/C-WIDEN/plan.xml");
+    expect(result.derivedStates).toContain("approved-scope-widening-pending");
+    expect(change.derivedStates).toContain("approved-scope-widening-pending");
+    expect(result.derivedStates).not.toContain("approved-contract-drift");
+    expect(result.derivedStates).not.toContain("unexplained-observed-drift");
+    expect(result.nextAction).toBe("Commit the widening on its own, touching nothing outside .grace/, before writing the newly admitted files.");
+  });
+
+  it("keeps a narrowed scope as a hard stop", async () => {
+    const { root, planFile } = initCommittedProject("C-NARROW");
+    writeFileSync(planFile, readFileSync(planFile, "utf8").replace("<File>src/example.ts</File>", "<None />"));
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-NARROW")!;
+    expect(change.derivedStates).toContain("approved-contract-drift");
+    expect(change.derivedStates).not.toContain("approved-scope-widening-pending");
+    expect(result.observedDrift.unexplainedFiles).toContain(".grace/changes/active/C-NARROW/plan.xml");
+    expect(result.nextAction).toContain("Hard stop");
+  });
+
+  it("keeps a widening that also edits another plan section as a hard stop", async () => {
+    const { root, planFile } = initCommittedProject("C-MIXED");
+    writeFileSync(
+      planFile,
+      readFileSync(planFile, "utf8")
+        .replace("<File>src/example.ts</File>", "<File>src/example.ts</File><File>src/extra.ts</File>")
+        .replace("Apply the change.", "Apply the edited change."),
+    );
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-MIXED")!;
+    expect(change.derivedStates).toContain("approved-contract-drift");
+    expect(change.derivedStates).not.toContain("approved-scope-widening-pending");
+    expect(result.nextAction).toContain("Hard stop");
+  });
+
+  it("keeps a widening that also changes spec.xml as a hard stop", async () => {
+    const { root, planFile } = initCommittedProject("C-SPEC");
+    writeFileSync(planFile, readFileSync(planFile, "utf8").replace("<File>src/example.ts</File>", "<File>src/example.ts</File><File>src/extra.ts</File>"));
+    const specFile = path.join(root, ".grace/changes/active/C-SPEC/spec.xml");
+    writeFileSync(specFile, readFileSync(specFile, "utf8").replace("<Summary>Change.</Summary>", "<Summary>Changed.</Summary>"));
+
+    const result = await collectProjectStatus(root);
+    const change = result.changes.find((entry) => entry.changeId === "C-SPEC")!;
+    expect(change.derivedStates).toContain("approved-contract-drift");
+    expect(change.derivedStates).not.toContain("approved-scope-widening-pending");
+    expect(result.nextAction).toContain("Hard stop");
+  });
+
   it("does not confuse a newly created untracked approved bundle with post-approval contract drift", async () => {
     const root = createProject();
     writeMinimalGrace4Project(root);
