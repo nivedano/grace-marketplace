@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { evaluateAssertion, extractAssertionsWithIssues, filterAssertionIssuesForLifecycle, type AssertionContext, type AssertionExtractionResult, type AssertionLifecycle } from "../grace4/assertions";
 import { formatDuration, runDeclaredCommands, type CommandRunResult, type DeclaredCommand } from "../grace4/command-runner";
+import { checkCommittedScope, type CommittedScopeReport } from "../grace4/committed-scope";
 import { validateGrace4Project } from "../grace4/grammar";
 import { detectGraceProjectKind, formatGrace3MigrationGuidance, resolveGrace4Paths } from "../grace4/project";
 import { buildGraphProjection, buildVerificationProjection, type GraphProjection, type VerificationProjection } from "../grace4/projections";
@@ -11,7 +12,7 @@ import { ANCHOR_PATTERNS, type Grace4Issue, type Grace4ProjectPaths } from "../g
 import { readGraceXmlArtifact } from "../grace4/xml";
 import { analyzeGovernedFile, collectCodeFiles, describeUnreadableDirectory, hasGraceMarkers, type UnreadableDirectoryHandler } from "../project-utils";
 import { withLintIssueGuide } from "./catalog";
-import { loadGraceLintConfig, resolveRunLogRetention } from "./config";
+import { committedScopeExemptGlobs, loadGraceLintConfig, resolveRunLogRetention } from "./config";
 import type { CommandEvidence, LintIssue, LintOptions, LintProfile, LintResult } from "./types";
 
 const TEXT_FORMAT_OPTIONS = new Set(["text", "json"]);
@@ -146,7 +147,7 @@ async function validateAssertions(
   verification: VerificationProjection,
   root: string,
   options: LintOptions,
-) {
+): Promise<string | null> {
   const runCommands = options.runCommands ?? false;
   const assertionMode = options.assertionMode ?? "current";
   const selectedPlan = assertionMode === "current" ? null : resolveSelectedApprovedPlan(result, paths, options.changeId);
@@ -226,6 +227,7 @@ async function validateAssertions(
   for (const job of jobs) {
     evaluateJob(result, job, context);
   }
+  return selectedPlan;
 }
 
 /** One DeclaredCommand per Command value of every semantically evaluated MustPassCommand. */
@@ -339,6 +341,22 @@ function resolveSelectedApprovedPlan(
   }
   return planFile;
 }
+/** Final mode only: checks the selected change's committed history against its approved scope. */
+function applyCommittedScope(result: LintResult, root: string, options: LintOptions, selectedPlan: string | null) {
+  if (options.assertionMode !== "final" || !selectedPlan || !options.changeId) {
+    return;
+  }
+  const { config } = loadGraceLintConfig(root);
+  const { issues, report } = checkCommittedScope(root, options.changeId, {
+    requireChangeTrailers: config?.requireChangeTrailers ?? false,
+    exempt: committedScopeExemptGlobs(config),
+  });
+  for (const issue of issues) {
+    addGrace4Issue(result, issue);
+  }
+  result.committedScope = report;
+}
+
 /** Lints the current GRACE 4 .grace document state and file-local semantic markup. */
 export async function lintGraceProject(projectRoot: string, options: LintOptions = {}): Promise<LintResult> {
   const root = path.resolve(projectRoot);
@@ -393,13 +411,63 @@ export async function lintGraceProject(projectRoot: string, options: LintOptions
   const unreadableDirectory = reportUnreadableDirectory(result);
   const planFilesActive = [...listPlanFiles(paths.changesActiveDir, unreadableDirectory)];
   const planFilesArchived = [...listPlanFiles(paths.changesArchiveDir, unreadableDirectory)];
-  await validateAssertions(result, paths, planFilesActive, planFilesArchived, graph, verification, root, options);
+  const selectedPlan = await validateAssertions(result, paths, planFilesActive, planFilesArchived, graph, verification, root, options);
+  applyCommittedScope(result, root, options, selectedPlan);
 
   return finalizeResult(result);
 }
 
 export function isValidTextFormat(format: string) {
   return TEXT_FORMAT_OPTIONS.has(format);
+}
+
+const COMMITTED_SCOPE_LIST_CAP = 20;
+
+/** At most 20 entries, then a count of the rest. */
+function capList(items: string[], indent = "    "): string[] {
+  const shown = items.slice(0, COMMITTED_SCOPE_LIST_CAP).map((item) => `${indent}- ${item}`);
+  if (items.length > COMMITTED_SCOPE_LIST_CAP) {
+    shown.push(`${indent}… ${items.length - COMMITTED_SCOPE_LIST_CAP} more`);
+  }
+  return shown;
+}
+
+function capInline(items: string[]): string {
+  const shown = items.slice(0, COMMITTED_SCOPE_LIST_CAP).join(", ");
+  return items.length > COMMITTED_SCOPE_LIST_CAP ? `${shown}, … ${items.length - COMMITTED_SCOPE_LIST_CAP} more` : shown;
+}
+
+function formatCommittedScopeSection(report: CommittedScopeReport): string[] {
+  const lines = ["", `Committed scope (${report.changeId})`];
+  if (report.skipped) {
+    lines.push(`  Skipped: ${report.skipped}`);
+    return lines;
+  }
+  lines.push(`  B: ${report.firstCommit ?? "none"}`, `  A: ${report.approvalCommit ?? "none"}`);
+  if (report.approvalPoints.length > 0) {
+    lines.push(`  Approval points: ${capInline(report.approvalPoints)}`);
+  }
+  const section = (heading: string, items: string[]) => {
+    if (items.length > 0) {
+      lines.push(`  ${heading} (${items.length}):`, ...capList(items));
+    }
+  };
+  section("Re-approval additions", report.reapprovalAdded.map((entry) => `${entry.commit}: ${capInline(entry.added)}`));
+  section("Mutations", report.mutations.map((entry) => `${entry.commit}: ${capInline(entry.sections)}`));
+  section("Amendments", report.amendments.map((entry) => `${entry.commit}: ${capInline(entry.sections)}`));
+  section("Widening commits", report.wideningCommits.map((entry) => `${entry.commit}: ${capInline(entry.added)}`));
+  section("Errors", report.errors.map((entry) => `${entry.file} (${entry.code}) in ${entry.commit}`));
+  section("Far", report.widenedFar);
+  section("Near", report.widenedNear);
+  section("Exempt", report.exempt);
+  lines.push(`  Owned commits: ${report.ownedCommits}`);
+  if (report.untaggedInScope.length > 0) {
+    lines.push(`  In scope without trailer (${report.untaggedInScope.length}): ${capInline(report.untaggedInScope)}`);
+  }
+  if (report.untaggedOther.count > 0) {
+    lines.push(`  Elsewhere without trailer: ${report.untaggedOther.count} (${capInline(report.untaggedOther.commits)})`);
+  }
+  return lines;
 }
 
 export function formatTextReport(result: LintResult, options: { remediate?: boolean } = {}) {
@@ -431,6 +499,10 @@ export function formatTextReport(result: LintResult, options: { remediate?: bool
     if (firstLog) {
       lines.push(`  Logs: ${path.dirname(firstLog)}`);
     }
+  }
+
+  if (result.committedScope) {
+    lines.push(...formatCommittedScopeSection(result.committedScope));
   }
 
   lines.push(`Errors: ${result.summary.errors}`, `Warnings: ${result.summary.warnings}`);

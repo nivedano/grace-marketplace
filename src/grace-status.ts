@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { defineCommand, type CommandDef, runMain } from "citty";
 
@@ -8,8 +8,9 @@ import { lintGraceProject } from "./lint/core";
 import type { LintIssue } from "./lint/types";
 import { detectGraceProjectKind, formatGrace3MigrationGuidance, resolveGrace4Paths } from "./grace4/project";
 import { buildGraphProjection, buildVerificationProjection, type GraphProjection, type VerificationProjection } from "./grace4/projections";
-import { collectActiveChangeScopes, createDurableOwnershipIndex, detectScopeOverlaps, detectUnsafeConcurrentExecution, observedWriteScopeContains, type ActiveChangeScope } from "./grace4/scope";
-import { readGraceXmlArtifact } from "./grace4/xml";
+import { collectActiveChangeScopes, createDurableOwnershipIndex, detectScopeOverlaps, detectUnsafeConcurrentExecution, extractObservedWriteScope, observedWriteScopeContains, type ActiveChangeScope } from "./grace4/scope";
+import { comparePlansIgnoringObservedScope, isPlanAmendment, scopeIsSuperset } from "./grace4/plan-compare";
+import { parseGraceXmlArtifact, readGraceXmlArtifact } from "./grace4/xml";
 import { collectModuleHealth } from "./query/health";
 import { loadGraceArtifactIndex } from "./query/core";
 import { GraceCommandError, runGraceCommand } from "./query/errors";
@@ -83,7 +84,12 @@ type DriftRouteIndex = {
 type CollectedObservedDrift = {
   drift: StatusResult["observedDrift"];
   trackedChangedFiles: Set<string>;
+  /** Approved bundles whose only tracked change is a pending widening or amendment of plan.xml, by change id. */
+  planEditPending: Map<string, PlanEditPendingState>;
 };
+
+/** A working-tree edit of an approved plan.xml that is committed on its own rather than a hard stop. */
+type PlanEditPendingState = "approved-scope-widening-pending" | "approved-plan-amendment-pending";
 
 function topIssues(issues: LintIssue[]) {
   return issues.slice(0, 5).map((issue) => `${issue.code}: ${issue.file}${issue.line ? `:${issue.line}` : ""} ${issue.message}`);
@@ -171,6 +177,8 @@ function chooseNextAction(result: Omit<StatusResult, "nextAction">) {
   if (result.derivedStates.includes("stale-plan")) return "Supersede and replan the stale approved change; do not edit the approved plan or continue execution.";
   if (result.integrity.errors > 0) return "Run grace lint --path <project-root> and fix GRACE 4 integrity errors.";
   if (result.derivedStates.includes("module-health-unavailable")) return "Run grace lint --path <project-root> to diagnose why module health could not be loaded; module readiness is unknown before executing changes.";
+  if (result.derivedStates.includes("approved-scope-widening-pending")) return "Commit the widening on its own, touching nothing outside .grace/, before writing the newly admitted files.";
+  if (result.derivedStates.includes("approved-plan-amendment-pending")) return "Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body.";
   if (result.derivedStates.includes("unexplained-observed-drift")) return "Use $grace-refresh to reconcile unexplained repository changes through a new GraceChangeSpec and GraceChangePlan.";
   if (result.derivedStates.includes("scope-overlap")) return "Review active change scope overlaps; replan or execute sequentially before parallel-safe work.";
   if (result.changes.some((change) => change.derivedStates.includes("ready-to-execute"))) return "Run $grace-execute for approved active changes.";
@@ -242,8 +250,15 @@ export async function collectProjectStatus(
   ];
   const collectedDrift = collectObservedDrift(root, activeScopes, buildDriftRouteIndex(root, graph, verification));
   const observedDrift = collectedDrift.drift;
-  const approvedContractDrift = collectApprovedContractDrift(root, activeScopes, collectedDrift.trackedChangedFiles);
+  const approvedContractDrift = collectApprovedContractDrift(root, activeScopes, collectedDrift.trackedChangedFiles, collectedDrift.planEditPending);
   const changes = rawChanges.map((change) => {
+    const pending = collectedDrift.planEditPending.get(change.changeId);
+    if (pending) {
+      return {
+        ...change,
+        derivedStates: [...new Set([...change.derivedStates.filter((state) => state !== "ready-to-execute"), pending])],
+      };
+    }
     if (!approvedContractDrift.has(change.changeId)) return change;
     return {
       ...change,
@@ -358,21 +373,17 @@ export function formatStatusText(result: StatusResult) {
 }
 
 function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], routes: DriftRouteIndex): CollectedObservedDrift {
-  const statusResult = Bun.spawnSync({
-    cmd: ["git", "-c", "status.relativePaths=true", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."],
-    cwd: root,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const statusResult = runGit(root, ["-c", "status.relativePaths=true", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]);
   if (statusResult.exitCode !== 0) {
-    return { drift: { available: false, changedFiles: [], explainedFiles: [], unexplainedFiles: [] }, trackedChangedFiles: new Set() };
+    return { drift: { available: false, changedFiles: [], explainedFiles: [], unexplainedFiles: [] }, trackedChangedFiles: new Set(), planEditPending: new Map() };
   }
 
   const statusOutput = new TextDecoder().decode(statusResult.stdout);
   const { changedFiles, trackedChangedFiles } = parsePorcelainV1ZPaths(statusOutput);
 
   const approvedScopes = activeScopes.filter((scope) => scope.specStatus === "approved" && scope.planStatus === "approved");
-  const explainedFiles = changedFiles.filter((file) => approvedScopes.some((scope) => activeScopeExplainsFile(root, scope, file, routes, trackedChangedFiles)));
+  const planEditPending = collectPlanEditPending(root, approvedScopes, trackedChangedFiles);
+  const explainedFiles = changedFiles.filter((file) => approvedScopes.some((scope) => activeScopeExplainsFile(root, scope, file, routes, trackedChangedFiles, planEditPending)));
   const explained = new Set(explainedFiles);
   return {
     drift: {
@@ -382,7 +393,48 @@ function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], r
       unexplainedFiles: changedFiles.filter((file) => !explained.has(file)),
     },
     trackedChangedFiles,
+    planEditPending,
   };
+}
+
+/** The one place the CLI runs git: piped stdout and stderr, never inherited. */
+function runGit(cwd: string, args: string[]) {
+  return Bun.spawnSync({ cmd: ["git", ...args], cwd, stdout: "pipe", stderr: "pipe" });
+}
+
+/**
+ * Finds approved bundles whose only tracked change is plan.xml and whose working plan keeps or widens HEAD's
+ * ObservedWriteScope. A plan otherwise equal to HEAD's is a pending widening; one that also differs only in
+ * ImplementationPlan or IntentSummary is a pending amendment. Anything unreadable, unparseable, narrower, or
+ * different in a gate section is not pending.
+ */
+function collectPlanEditPending(root: string, approvedScopes: ActiveChangeScope[], trackedChangedFiles: ReadonlySet<string>): Map<string, PlanEditPendingState> {
+  const pending = new Map<string, PlanEditPendingState>();
+  for (const scope of approvedScopes) {
+    const bundlePath = path.relative(root, scope.bundlePath).replaceAll(path.sep, "/");
+    const planPath = `${bundlePath}/plan.xml`;
+    if (!trackedChangedFiles.has(planPath) || trackedChangedFiles.has(`${bundlePath}/spec.xml`)) continue;
+    try {
+      const headResult = runGit(root, ["show", `HEAD:./${planPath}`]);
+      if (headResult.exitCode !== 0) continue;
+      const headPlan = parseGraceXmlArtifact(planPath, new TextDecoder().decode(headResult.stdout));
+      const workPlan = parseGraceXmlArtifact(planPath, readFileSync(path.join(root, planPath), "utf8"));
+      if (!headPlan.root || !workPlan.root) continue;
+      const headScope = extractObservedWriteScope(headPlan.root, root, planPath);
+      const workScope = extractObservedWriteScope(workPlan.root, root, planPath);
+      if (headScope.issues.some((issue) => issue.severity === "error") || workScope.issues.some((issue) => issue.severity === "error")) continue;
+      if (!scopeIsSuperset(workScope.scope, headScope.scope)) continue;
+      const comparison = comparePlansIgnoringObservedScope(headPlan.root, workPlan.root);
+      if (comparison.equal) {
+        pending.set(scope.changeId, "approved-scope-widening-pending");
+      } else if (isPlanAmendment(comparison.sections, headPlan.root, workPlan.root)) {
+        pending.set(scope.changeId, "approved-plan-amendment-pending");
+      }
+    } catch {
+      continue;
+    }
+  }
+  return pending;
 }
 
 function parsePorcelainV1ZPaths(output: string): { changedFiles: string[]; trackedChangedFiles: Set<string> } {
@@ -410,12 +462,15 @@ function parsePorcelainV1ZPaths(output: string): { changedFiles: string[]; track
   };
 }
 
-function activeScopeExplainsFile(root: string, scope: ActiveChangeScope, file: string, routes: DriftRouteIndex, trackedChangedFiles: ReadonlySet<string>): boolean {
+function activeScopeExplainsFile(root: string, scope: ActiveChangeScope, file: string, routes: DriftRouteIndex, trackedChangedFiles: ReadonlySet<string>, planEditPending: ReadonlyMap<string, PlanEditPendingState>): boolean {
   if (observedWriteScopeContains(scope.observedWrites, file)) {
     return true;
   }
 
   const bundlePath = path.relative(root, scope.bundlePath).replaceAll(path.sep, "/");
+  if (planEditPending.has(scope.changeId) && file === `${bundlePath}/plan.xml`) {
+    return true;
+  }
   if (trackedChangedFiles.has(file) && (file === `${bundlePath}/spec.xml` || file === `${bundlePath}/plan.xml`)) {
     return false;
   }
@@ -472,9 +527,9 @@ function buildDriftRouteIndex(root: string, graph: GraphProjection, verification
   return routes;
 }
 
-function collectApprovedContractDrift(root: string, activeScopes: ActiveChangeScope[], trackedChangedFiles: ReadonlySet<string>): Set<string> {
+function collectApprovedContractDrift(root: string, activeScopes: ActiveChangeScope[], trackedChangedFiles: ReadonlySet<string>, planEditPending: ReadonlyMap<string, PlanEditPendingState>): Set<string> {
   return new Set(activeScopes
-    .filter((scope) => scope.specStatus === "approved" && scope.planStatus === "approved")
+    .filter((scope) => scope.specStatus === "approved" && scope.planStatus === "approved" && !planEditPending.has(scope.changeId))
     .filter((scope) => {
       const bundlePath = path.relative(root, scope.bundlePath).replaceAll(path.sep, "/");
       return trackedChangedFiles.has(`${bundlePath}/spec.xml`) || trackedChangedFiles.has(`${bundlePath}/plan.xml`);
