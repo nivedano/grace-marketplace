@@ -79,13 +79,53 @@ describe("comparePlansIgnoringObservedScope", () => {
     expect(comparePlansIgnoringObservedScope(left, right)).toEqual({ equal: false, sections: ["ImplementationPlan"] });
   });
 
-  // The parser runs with trimValues disabled, so whitespace-only text survives in
-  // GraceXmlNode.text. The comparator compares text exactly, which makes a
-  // reformatted plan unequal: a fail-safe inequality, not a silent pass.
-  it("treats whitespace-only text differences as unequal because the parser does not trim", () => {
+  // The parser runs with trimValues disabled, so formatting whitespace survives in GraceXmlNode.text.
+  // Plan XML is not mixed content, so the comparator trims text and collapses internal whitespace runs:
+  // re-indentation and whitespace-only differences are equal, while any non-whitespace change still differs.
+  it("treats whitespace-only text differences as equal", () => {
     const compact = parse(plan());
     const spaced = parse(plan().replaceAll("><", ">\n  <"));
-    expect(comparePlansIgnoringObservedScope(compact, spaced).equal).toBe(false);
+    expect(comparePlansIgnoringObservedScope(compact, spaced)).toEqual({ equal: true, sections: [] });
+  });
+
+  it("treats a pretty-printed plan with an extra File line and re-indented neighbours as equal", () => {
+    const left = parse(`<GraceChangePlan graceVersion="4.0" status="approved">
+  <C-ONE>
+    <TargetAssertions><A-1>one</A-1></TargetAssertions>
+    <ObservedWriteScope>
+      <File>src/a.ts</File>
+    </ObservedWriteScope>
+    <DurableScope><None /></DurableScope>
+  </C-ONE>
+</GraceChangePlan>`);
+    const right = parse(`<GraceChangePlan graceVersion="4.0" status="approved">
+<C-ONE>
+        <TargetAssertions>
+            <A-1>one</A-1>
+        </TargetAssertions>
+
+        <ObservedWriteScope>
+            <File>src/a.ts</File>
+            <File>src/b.ts</File>
+        </ObservedWriteScope>
+        <DurableScope>
+            <None />
+        </DurableScope>
+</C-ONE>
+</GraceChangePlan>`);
+    expect(comparePlansIgnoringObservedScope(left, right)).toEqual({ equal: true, sections: [] });
+  });
+
+  it("still differs on a one-word change in a Criterion, and collapses internal whitespace runs", () => {
+    const withCriterion = (text: string) => parse(plan({ assertions: `<A-1><Criterion>${text}</Criterion></A-1>` }));
+    expect(comparePlansIgnoringObservedScope(withCriterion("the scope must hold"), withCriterion("the scope should hold"))).toEqual({
+      equal: false,
+      sections: ["TargetAssertions"],
+    });
+    expect(comparePlansIgnoringObservedScope(withCriterion("the scope must hold"), withCriterion("  the  scope\n   must hold "))).toEqual({
+      equal: true,
+      sections: [],
+    });
   });
 
   it("treats a plan with no wrapper like any other tree and reports root", () => {

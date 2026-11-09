@@ -12,8 +12,9 @@ const OBSERVED_WRITE_SCOPE_TAG = "ObservedWriteScope";
 
 /**
  * Compares two parsed GraceChangePlan roots, ignoring the ObservedWriteScope that is a direct child of the
- * C-* wrapper. Attributes compare order-insensitively; children and text compare in order. Text is compared
- * exactly, because the parser does not trim, so whitespace-only changes count as differences.
+ * C-* wrapper. Attributes compare order-insensitively and exactly; children compare in order. Text is
+ * trimmed and its internal whitespace runs collapse to one space before comparing, because the parser does not
+ * trim and plan XML is not mixed content, so formatting whitespace carries no meaning.
  *
  * sections lists the differing direct children of the wrapper by tag name, "wrapper" when the wrapper itself
  * (tag, attributes, text, or the order of its children) differs, and "root" when the root differs.
@@ -29,7 +30,7 @@ export function comparePlansIgnoringObservedScope(left: GraceXmlNode, right: Gra
   const leftWrapper = findWrapper(left);
   const rightWrapper = findWrapper(right);
 
-  if (!sameAttributes(left.attributes, right.attributes) || left.tag !== right.tag || left.text !== right.text) {
+  if (!sameAttributes(left.attributes, right.attributes) || left.tag !== right.tag || !sameText(left.text, right.text)) {
     add("root");
   }
 
@@ -49,7 +50,7 @@ export function comparePlansIgnoringObservedScope(left: GraceXmlNode, right: Gra
   if (
     leftWrapper.tag !== rightWrapper.tag
     || !sameAttributes(leftWrapper.attributes, rightWrapper.attributes)
-    || leftWrapper.text !== rightWrapper.text
+    || !sameText(leftWrapper.text, rightWrapper.text)
   ) {
     add("wrapper");
   }
@@ -73,6 +74,14 @@ export function scopeIsSuperset(wider: ObservedWriteScope, narrower: ObservedWri
   const files = new Set(wider.files);
   const globs = new Set(wider.globs);
   return narrower.files.every((file) => files.has(file)) && narrower.globs.every((glob) => globs.has(glob));
+}
+
+function sameText(left: string, right: string): boolean {
+  return normalizeText(left) === normalizeText(right);
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function findWrapper(root: GraceXmlNode): GraceXmlNode | undefined {
@@ -103,7 +112,7 @@ function sameNodeList(left: GraceXmlNode[], right: GraceXmlNode[]): boolean {
 
 function sameNode(left: GraceXmlNode, right: GraceXmlNode): boolean {
   return left.tag === right.tag
-    && left.text === right.text
+    && sameText(left.text, right.text)
     && sameAttributes(left.attributes, right.attributes)
     && sameNodeList(left.children, right.children);
 }
