@@ -5,7 +5,7 @@ description: Refactor GRACE 4 governed code while keeping .grace graph, verifica
 
 <skill>
 <scope>
-Use this for rename, move, split, merge, extraction, or boundary cleanup work. Greenfield feature work should go through `grace-spec`, `grace-plan`, and `grace-execute`.
+Use this for rename, move, split, merge, extraction, or boundary cleanup work. Greenfield feature work should go through `grace-spec`, `grace-plan`, `grace-brief`, and `grace-execute`.
 </scope>
 
 <must_do>

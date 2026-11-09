@@ -1,10 +1,10 @@
 ---
 name: grace-plan
-description: Read an approved GRACE 4 GraceChangeSpec and optional design context, then create a GraceChangePlan with assertions, scopes, tasks, and verification gates.
+description: Read an active GRACE 4 GraceChangeSpec and optional design context, then draft a GraceChangePlan with assertions, scopes, tasks, and verification gates.
 ---
 
 <skill>
-<purpose>Convert one approved active `GraceChangeSpec` into the executable `GraceChangePlan`; do not implement source code.</purpose>
+<purpose>Convert one active `GraceChangeSpec` into the draft `GraceChangePlan` that completes the pair `spec.xml` and `plan.xml`; do not implement source code.</purpose>
 
 <inputs>
 - Required: `.grace/changes/active/C-CHANGE-ID/spec.xml`
@@ -13,22 +13,23 @@ description: Read an approved GRACE 4 GraceChangeSpec and optional design contex
 </inputs>
 
 <preflight>
-- Require `.grace/changes/active/C-CHANGE-ID/spec.xml` with `GraceChangeSpec`, status `approved`, and exactly one matching direct `C-*` wrapper.
-- Refuse draft, rejected, cancelled, applied, or superseded specs.
+- Require `.grace/changes/active/C-CHANGE-ID/spec.xml` with `GraceChangeSpec`, status `draft` or `approved`, and exactly one matching direct `C-*` wrapper.
+- Refuse rejected, cancelled, applied, or superseded specs.
 - Treat optional `design-context.xml` as explanatory; `spec.xml` wins on conflict.
 - Run `grace lint --path PROJECT --assertions current` before planning and surface stale or invalid active baselines.
 </preflight>
 
 <approved_plan_immutability>
 - If `plan.xml` already exists with status `approved`, stop before writing.
-- Do not refresh `BaselineAssertions`, `TargetAssertions` or `DurableScope` in place.
+- Do not refresh `BaselineAssertions`, `TargetAssertions` or `DurableScope` of an approved plan; change them through a superseding bundle, or through a re-approval before the first commit that writes outside `.grace/`; never in place.
 - Create a new `C-*` bundle and mark the old bundle superseded with an explicit replacement reference.
+- Return `plan.xml` to draft for a re-approval only through `$grace-brief`, then edit the draft plan.
 - Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. `grace-execute` defines the procedure.
 - Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them.
 </approved_plan_immutability>
 
 <must_do>
-Produce `plan.xml` from `references/change-plan-template.xml` as draft unless the user explicitly approves the completed plan. Require a matching `C-*` wrapper, meaningful intent, non-empty machine-checkable baseline and target assertions, explicit durable and observed scopes, and unique acyclic `T-NNN` tasks. A scope with no writes must use an explicit `<None />` marker; prose such as "none" is invalid. Every task has one `Title`, one `DependsOn` element listing zero or more predecessors as canonical comma-separated `T-NNN` values (for example `<DependsOn>T-001, T-002</DependsOn>`), non-empty acceptance criteria, and non-empty verification commands. Dependencies form a directed acyclic graph: list only true predecessors and never linearize independent tasks into a chain to express ordering. Surface stale-state and coexistence warnings, and reject unsupported scope glob syntax instead of guessing.
+Produce `plan.xml` from `references/change-plan-template.xml` as draft unless the user explicitly approves the pair at the approval question of `$grace-brief` after the audit. Ask for no approval. Require a matching `C-*` wrapper, meaningful intent, non-empty machine-checkable baseline and target assertions, explicit durable and observed scopes, and unique acyclic `T-NNN` tasks. A scope with no writes must use an explicit `<None />` marker; prose such as "none" is invalid. Every task has one `Title`, one `DependsOn` element listing zero or more predecessors as canonical comma-separated `T-NNN` values (for example `<DependsOn>T-001, T-002</DependsOn>`), non-empty acceptance criteria, and non-empty verification commands. Dependencies form a directed acyclic graph: list only true predecessors and never linearize independent tasks into a chain to express ordering. Surface stale-state and coexistence warnings, and reject unsupported scope glob syntax instead of guessing.
 </must_do>
 
 <scope_discipline>
@@ -54,10 +55,10 @@ Give every task and check one of two justifications: a spec `Criterion` it serve
 <validation>
 - Active-baseline preflight: `grace lint --path PROJECT --assertions current`
 - Parallel safety: `grace lint --path PROJECT --parallel-preflight`
-- Recommend `grace status --path PROJECT --json` after approval.
+- Next steps, in the same session: `$grace-brief`, which runs the draft baseline lint `grace lint --path PROJECT --change C-CHANGE-ID --assertions baseline --draft` before the audit.
 </validation>
 
 <hard_rules>
-Do not implement code, silently approve a plan, overwrite an approved plan, or mutate current graph/verification artifacts while planning. Semantic anchors are canonical XML tags, never attributes.
+Do not implement code, set `status="approved"` on a plan, overwrite an approved plan, or mutate current graph/verification artifacts while planning. Semantic anchors are canonical XML tags, never attributes.
 </hard_rules>
 </skill>

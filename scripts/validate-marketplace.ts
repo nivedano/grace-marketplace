@@ -27,6 +27,7 @@ const REQUIRED_GRACE4_SKILLS = new Set([
   "grace-init",
   "grace-spec",
   "grace-plan",
+  "grace-brief",
   "grace-execute",
   "grace-refactor",
   "grace-setup-subagents",

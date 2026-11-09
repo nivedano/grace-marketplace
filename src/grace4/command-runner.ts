@@ -34,6 +34,8 @@ export type CommandRunnerOptions = {
   root: string;
   changeId?: string;
   assertionMode: string;
+  /** Status of the plan the run was selected for; recorded in meta.json. */
+  selectedPlanStatus?: "approved" | "draft";
   /** Per-command timeout in ms; 0 disables. */
   timeoutMs: number;
   verbosity: "compact" | "live";
@@ -111,6 +113,7 @@ export async function runDeclaredCommands(
       tool: "grace-lint",
       changeId: options.changeId ?? null,
       assertionMode: options.assertionMode,
+      selectedPlanStatus: options.selectedPlanStatus ?? null,
       projectRoot: path.resolve(options.root),
       slug: projectSlug(options.root),
       pid: process.pid,

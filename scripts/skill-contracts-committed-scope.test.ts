@@ -105,7 +105,7 @@ describe("committed-scope skill contracts", () => {
     expect(commitBlock).toContain("same final paragraph as `Co-Authored-By`");
     expect(commitBlock).toContain("grace status");
     expect(commitBlock).toContain(
-      "Commit the approved `plan.xml` in or before the first commit that writes outside `.grace/`.",
+      "Commit the approved `plan.xml` before the first commit that writes outside `.grace/`.",
     );
     expect(commitBlock).toContain("stop and report unexplained files");
     expect(commitBlock).not.toContain("resolve unexplained files");
@@ -162,10 +162,11 @@ describe("committed-scope skill contracts", () => {
       "scope.approved-plan-amended",
       "scope.reapproval-changed-gates",
       "scope.committed-check-failed",
+      "scope.reapproval-after-write",
     ]) {
       expect(block).toContain(code);
     }
-    expect(block.match(/scope\.[a-z-]+/g)?.filter((code, index, all) => all.indexOf(code) === index)).toHaveLength(14);
+    expect(block.match(/scope\.[a-z-]+/g)?.filter((code, index, all) => all.indexOf(code) === index)).toHaveLength(15);
   });
 
   it("documents re-approval gate changes, git failures and the history rule", () => {

@@ -153,7 +153,13 @@ async function validateAssertions(
 ): Promise<string | null> {
   const runCommands = options.runCommands ?? false;
   const assertionMode = options.assertionMode ?? "current";
-  const selectedPlan = assertionMode === "current" ? null : resolveSelectedApprovedPlan(result, paths, options.changeId);
+  const resolved = assertionMode === "current"
+    ? null
+    : resolveSelectedApprovedPlan(result, paths, options.changeId, assertionMode === "baseline" && options.draft === true);
+  const selectedPlan = resolved?.planFile ?? null;
+  if (resolved) {
+    result.selectedPlanStatus = resolved.status;
+  }
 
   const jobs: SectionJob[] = [];
   const pushJob = (
@@ -208,6 +214,7 @@ async function validateAssertions(
         root,
         changeId: options.changeId,
         assertionMode,
+        selectedPlanStatus: resolved?.status,
         timeoutMs: options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
         verbosity: options.commandVerbosity ?? "compact",
         progress: options.commandProgress,
@@ -293,11 +300,17 @@ function evaluateJob(
   }
 }
 
+/**
+ * Resolves the selected bundle's plan. Both artifacts must be identity-matched and approved;
+ * `allowDraftPlan` (baseline mode under --draft) also accepts a draft plan beside a draft or
+ * approved spec. Anything else, including a missing bundle or plan.xml, is change-not-approved.
+ */
 function resolveSelectedApprovedPlan(
   result: LintResult,
   paths: Grace4ProjectPaths,
   changeId: string | undefined,
-): string | null {
+  allowDraftPlan = false,
+): { planFile: string; status: "approved" | "draft" } | null {
   if (!changeId) {
     addIssue(result, {
       severity: "error",
@@ -324,25 +337,30 @@ function resolveSelectedApprovedPlan(
   const plan = readGraceXmlArtifact(planFile);
   const specWrapper = spec.root?.children.filter((child) => ANCHOR_PATTERNS.change.test(child.tag));
   const planWrapper = plan.root?.children.filter((child) => ANCHOR_PATTERNS.change.test(child.tag));
-  const approved = spec.root?.tag === "GraceChangeSpec"
-    && spec.root.attributes.status === "approved"
-    && specWrapper?.length === 1
+  const specStatus = spec.root?.tag === "GraceChangeSpec" ? spec.root.attributes.status : undefined;
+  const planStatus = plan.root?.tag === "GraceChangePlan" ? plan.root.attributes.status : undefined;
+  const identityMatched = specWrapper?.length === 1
     && specWrapper[0]?.tag === changeId
-    && plan.root?.tag === "GraceChangePlan"
-    && plan.root.attributes.status === "approved"
     && planWrapper?.length === 1
     && planWrapper[0]?.tag === changeId;
+  const status: "approved" | "draft" | null = !identityMatched
+    ? null
+    : specStatus === "approved" && planStatus === "approved"
+      ? "approved"
+      : allowDraftPlan && planStatus === "draft" && (specStatus === "draft" || specStatus === "approved")
+        ? "draft"
+        : null;
 
-  if (!approved) {
+  if (!status) {
     addIssue(result, {
       severity: "error",
       code: "assertion.change-not-approved",
       file: bundleDir,
-      message: `Selected change ${changeId} must name one active bundle whose spec.xml and plan.xml are both approved and identity-matched.`,
+      message: `Selected change ${changeId} must name one active bundle whose spec.xml and plan.xml are both approved and identity-matched${allowDraftPlan ? ", or, with --draft, a draft plan.xml beside a draft or approved spec.xml" : ""}.`,
     });
     return null;
   }
-  return planFile;
+  return { planFile, status };
 }
 /** Final mode only: checks the selected change's committed history against its approved scope. */
 function applyCommittedScope(result: LintResult, root: string, options: LintOptions, selectedPlan: string | null) {
@@ -491,6 +509,10 @@ export function formatTextReport(result: LintResult, options: { remediate?: bool
     `Governed files: ${result.governedFiles}`,
     `XML artifacts checked: ${result.xmlFilesChecked}`,
   ];
+
+  if (result.selectedPlanStatus === "draft") {
+    lines.push("Selected plan: draft");
+  }
 
   if (result.commands?.length) {
     lines.push("Commands");

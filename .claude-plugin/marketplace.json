@@ -38,6 +38,7 @@
         "./skills/grace/grace-init",
         "./skills/grace/grace-spec",
         "./skills/grace/grace-plan",
+        "./skills/grace/grace-brief",
         "./skills/grace/grace-execute",
         "./skills/grace/grace-refactor",
         "./skills/grace/grace-setup-subagents",

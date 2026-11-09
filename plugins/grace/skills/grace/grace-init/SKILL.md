@@ -43,7 +43,7 @@ Every XML artifact uses `graceVersion="4.0"`. Semantic anchors are XML tags, nev
 2. If `.grace` or `AGENTS.md` already exists, stop and ask whether to keep, merge, or overwrite each existing artifact. Never overwrite silently.
 3. Create `.grace/context`, `.grace/graph`, `.grace/verification`, `.grace/changes/active`, and `.grace/changes/archive`.
 4. Read each `.template` file, replace `$PLACEHOLDER` values with gathered project information, and write the target file.
-5. Print created files and recommend the next workflow: use `grace-spec` to create an active `GraceChangeSpec`, then `grace-plan` to produce a `GraceChangePlan` before implementation.
+5. Print created files and recommend the next workflow: `grace-spec`, then `grace-plan` in the same session, both writing drafts, then `grace-brief` for the audit and one owner approval of the pair. Start `$grace-execute` only on a separate explicit owner order: the approval is not the execution order, even when both arrive in one message, unless the message says to execute.
 </steps>
 
 <hard_rules>

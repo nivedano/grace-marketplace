@@ -9,6 +9,7 @@ description: Operate the GRACE 4 CLI for .grace linting, status, module navigati
 <commands>
 - Active-baseline preflight before observed writes: `grace lint --path PROJECT --assertions current`
 - Selected baseline: `grace lint --path PROJECT --change C-ID --assertions baseline` (add `--run-commands` when the baseline declares `MustPassCommand`)
+- Draft baseline before the audit: `grace lint --path PROJECT --change C-ID --assertions baseline --draft` (add `--run-commands` when the baseline declares `MustPassCommand`)
 - Selected target: `grace lint --path PROJECT --change C-ID --assertions target --run-commands`
 - Final execution gate: `grace lint --path PROJECT --change C-ID --assertions final --run-commands`
 - Parallel preflight: `grace lint --path PROJECT --parallel-preflight`
@@ -26,6 +27,10 @@ description: Operate the GRACE 4 CLI for .grace linting, status, module navigati
 
 <lifecycle_command_contract>`current` evaluates active approved baselines and is not end-state evidence. Keep `MustPassCommand` entries as leaf project checks; do not nest `grace lint`, `grace status`, or another GRACE lifecycle command inside plan assertions. Run selected target/final lint externally.</lifecycle_command_contract>
 
+<draft_baseline_contract>
+`--draft` applies only with `--assertions baseline`; with `current`, `target` or `final` it is an `invalid-arguments` error. It also selects a bundle whose identity-matched `plan.xml` is `draft` beside a `draft` or `approved` `spec.xml`, and evaluates `BaselineAssertions` as for an approved plan, `--run-commands` included; on an approved pair it changes nothing. Without `--draft`, a draft `plan.xml` is `assertion.change-not-approved`, as is a missing bundle or `plan.xml` with or without it. The JSON result carries `selectedPlanStatus` (`approved` or `draft`), the text report prints `Selected plan: draft` for a draft, and the run log's `meta.json` records `selectedPlanStatus` from schema 1.2.0. Never use a draft-baseline run as the execution baseline; `grace archive` accepts only a passed `final` run.
+</draft_baseline_contract>
+
 <failure_contract>
 Lint, status, and navigation commands validate before returning records. JSON argument/runtime failures are one `{ "schemaVersion": "1.0.0", "ok": false, "error": { ... } }` object on stdout. Text failures are one concise actionable line with a nonzero exit code and no stack trace.
 </failure_contract>
@@ -38,6 +43,7 @@ Errors:
 - `scope.written-before-widening`: a file was written in the widening commit that admitted it, before that commit, or before the re-approval that admitted it.
 - `scope.written-before-approval`: a commit carrying the change's `Change` trailer wrote a file before the plan was approved.
 - `scope.approved-plan-mutated`: an approved plan changed outside `ObservedWriteScope` without a re-approval, in a direct section other than `ImplementationPlan` or `IntentSummary`, in section order, or with `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` nested inside either of those sections.
+- `scope.reapproval-after-write`: a re-approval followed the first commit carrying the change's `Change` trailer that wrote a file outside `.grace/` and outside `committedScopeExempt`.
 - `scope.approval-uncommitted`: no commit has `plan.xml` committed as `approved`; commit the approved `plan.xml`. Writes committed before it are reported as `scope.written-before-approval`.
 - `scope.no-owned-commits`: the scope is not `<None />` and no commit carries the `Change: <C-ID>` trailer; an error when `requireChangeTrailers` is `true`, otherwise a warning.
 - `scope.committed-check-failed`: a git command the check needs failed, for example a dubious-ownership refusal; the message names the command and carries git's stderr.
@@ -51,8 +57,17 @@ Warnings:
 - `scope.committed-check-skipped`: no `.git` is found at or above the project root, or the clone is shallow.
 Set `requireChangeTrailers` (boolean) in `.grace-lint.json`; it defaults to `false`.
 Set `committedScopeExempt` (array of globs in the `ObservedWriteScope` glob grammar, for example `["tracker/**"]`) in `.grace-lint.json`; matching files are listed under `exempt` in the `committedScope` report and are never classified or counted as writes outside `.grace/`. An invalid value raises `config.invalid-committed-scope-exempt`.
-`grace status` derives `approved-scope-widening-pending` for an uncommitted `ObservedWriteScope`-only widening of an approved plan, with the next action "Commit the widening on its own, touching nothing outside .grace/, before writing the newly admitted files.", and `approved-plan-amendment-pending` for an uncommitted amendment (optionally with a superset widening), with the next action "Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body." An edit to any other section of an approved `plan.xml`, a narrowed `ObservedWriteScope`, or any edit to `spec.xml` stays `approved-contract-drift`, a hard stop. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them. Write the admitted files only after that commit.
+`grace status` derives `approved-scope-widening-pending` for an uncommitted `ObservedWriteScope`-only widening of an approved plan, with the next action "Commit the widening on its own, touching nothing outside .grace/, before writing the newly admitted files.", and `approved-plan-amendment-pending` for an uncommitted amendment (optionally with a superset widening), with the next action "Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body." An edit to any other section of an approved `plan.xml`, a narrowed `ObservedWriteScope`, or any edit to `spec.xml` stays `approved-contract-drift` for a `spec.xml` approved in `HEAD`, a hard stop; only `plan.xml`, alone or with `spec.xml`, returned to `draft` by its root `status` alone is `return-pending-commit`. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them. Write the admitted files only after that commit.
 </committed_scope_contract>
+
+<status_contract>
+`grace status` derives four per-change states for the approval:
+- `awaiting-approval`: `spec.xml` and `plan.xml` are both `draft`; the next action is the draft baseline lint and `$grace-brief`, then the owner's approval of spec and plan together.
+- `approval-pending-commit`: against `HEAD`, `plan.xml` changed from `draft` to `approved`, and `spec.xml` is `approved` in `HEAD` and unchanged or changed from `draft` to `approved` with it, each differing from `HEAD` only in the root `status` attribute; the next action is to commit the approval, touching only `.grace/`, with its record. While it holds, the bundle's `ObservedWriteScope` explains no file outside the bundle directory. An approval that also changes content stays `approved-contract-drift`.
+- `return-pending-commit`: `plan.xml`, and `spec.xml` when it returns too, is `approved` in `HEAD`, `draft` in the working tree, and differs from `HEAD` only in the root `status` attribute; the next action is to commit the return on its own, touching only `.grace/`, naming who asked. A return of `spec.xml` alone, or a return that also changes content, stays `approved-contract-drift`.
+- `half-approval`: against `HEAD`, `spec.xml` changed from `draft` to `approved` while `plan.xml` is `draft` and not `approved` in `HEAD`; an error that fails `--fail-on errors`, with the next action to approve spec and plan together, or neither: restore the spec to draft.
+`approval-pending-commit`, `return-pending-commit` and `half-approval` compare against `HEAD`; without a `HEAD` none of them applies. `approval-pending-commit` and `return-pending-commit` remove `ready-to-execute`. The next action of `ready-to-execute` is to await the owner's explicit execution order, then run `$grace-execute`. A `spec.xml` or `plan.xml` that is `draft` in the working tree and `draft` or untracked in `HEAD` is explained by its bundle, and so is the bundle's `design-context.xml` while `plan.xml` is not `approved` in `HEAD`; none of them is unexplained drift.
+</status_contract>
 
 <runtime_contract>
 TypeScript/JavaScript analysis is bundled. Python and Dart governed files require their runtimes on PATH; missing runtimes fail closed with actionable `analysis.runtime-missing` diagnostics instead of silently dropping parity checks.

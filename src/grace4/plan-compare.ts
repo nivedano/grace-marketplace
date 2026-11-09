@@ -148,3 +148,19 @@ function sameNode(left: GraceXmlNode, right: GraceXmlNode): boolean {
     && sameAttributes(left.attributes, right.attributes)
     && sameNodeList(left.children, right.children);
 }
+
+/**
+ * Returns true when two parsed artifact roots are equal apart from the root `status` attribute. Attributes compare
+ * order-insensitively; children compare in order; text is trimmed and whitespace runs collapse, so CRLF and LF
+ * copies of the same artifact are equal. Only the root's `status` is ignored, never a nested one.
+ */
+export function sameTreeIgnoringRootStatus(left: GraceXmlNode, right: GraceXmlNode): boolean {
+  const withoutStatus = (attributes: Record<string, string>): Record<string, string> => {
+    const { status: _status, ...rest } = attributes;
+    return rest;
+  };
+  return left.tag === right.tag
+    && sameText(left.text, right.text)
+    && sameAttributes(withoutStatus(left.attributes), withoutStatus(right.attributes))
+    && sameNodeList(left.children, right.children);
+}

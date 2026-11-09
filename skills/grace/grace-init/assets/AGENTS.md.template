@@ -20,7 +20,7 @@ Legacy `docs/*.xml` files are not GRACE 4 state. If legacy GRACE 3 docs appear, 
 
 ## Workflow Rules
 
-1. Do not implement source behavior before an approved active `GraceChangeSpec` and `GraceChangePlan` exist, unless the user explicitly requests a small direct fix.
+1. Write an active `GraceChangeSpec` and `GraceChangePlan` as drafts, audit them through `$grace-brief`, and implement no source behavior before one owner approval sets both to `approved`, unless the user explicitly requests a small direct fix. Start `$grace-execute` only on a separate explicit owner order: the approval is not the execution order, even when both arrive in one message, unless the message says to execute.
 2. Treat `spec.xml` as normative. Treat `design-context.xml` as explanatory memory only.
 3. Before execution, check `BaselineAssertions`, `TargetAssertions`, `DurableScope`, and `ObservedWriteScope` in the plan.
 4. Update durable `.grace` graph and verification state only as part of the approved change lifecycle.

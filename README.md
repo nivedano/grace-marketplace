@@ -81,14 +81,15 @@ For a new GRACE 4 project:
 
 1. Run `$grace-init` to create `.grace`.
 2. Fill `.grace/context` artifacts with your agent.
-3. Run `$grace-spec` for a change.
-4. Run `$grace-plan` after spec approval.
-5. Before observed writes begin, run the active-baseline preflight: `grace lint --path /path/to/project --assertions current`.
-6. Run `grace lint --path /path/to/project --change C-ID --assertions baseline` before execution; add `--run-commands` when the baseline declares `MustPassCommand`.
-7. Run `grace status --path /path/to/project --json`.
-8. Run `$grace-execute` and choose sequential or parallel-safe mode. Parallel-safe mode additionally requires `grace lint --path /path/to/project --parallel-preflight`.
-9. Before apply/archive, commit all work, then run `grace lint --path /path/to/project --change C-ID --assertions final`; add `--run-commands` when the target declares `MustPassCommand`.
-10. Archive the applied bundle with `grace archive --path /path/to/project --change C-ID`. It requires a passing final run started on a clean tree at the current HEAD, refuses changes outside the bundle, flips both statuses to `applied`, stages the move, and never commits.
+3. Run `$grace-spec` for a change; it records the user's decisions in `design-context.xml` and writes `spec.xml` as `draft`.
+4. Run `$grace-plan` in the same session. It writes `plan.xml` as `draft`; no approval sits between the two drafts.
+5. Run `$grace-brief`: it runs `grace lint --path /path/to/project --change C-ID --assertions baseline --draft`, commits the draft pair, has an independent subagent audit it, and shows the owner a one-screen brief; one owner approval sets `spec.xml` and `plan.xml` to `approved` in one commit that touches only `.grace/`.
+6. Before observed writes begin, run the active-baseline preflight: `grace lint --path /path/to/project --assertions current`.
+7. Run `grace lint --path /path/to/project --change C-ID --assertions baseline` before execution; add `--run-commands` when the baseline declares `MustPassCommand`.
+8. Run `grace status --path /path/to/project --json`; `ready-to-execute` awaits the owner's explicit execution order, and the approval is not the execution order.
+9. On that order, run `$grace-execute` and choose sequential or parallel-safe mode. Parallel-safe mode additionally requires `grace lint --path /path/to/project --parallel-preflight`.
+10. Before apply/archive, commit all work, then run `grace lint --path /path/to/project --change C-ID --assertions final`; add `--run-commands` when the target declares `MustPassCommand`.
+11. Archive the applied bundle with `grace archive --path /path/to/project --change C-ID`. It requires a passing final run started on a clean tree at the current HEAD, refuses changes outside the bundle, flips both statuses to `applied`, stages the move, and never commits.
 
 Existing GRACE 3 projects should run `$grace-migrate` and review the migration report before writing `.grace` artifacts.
 
@@ -99,8 +100,9 @@ Migration cleanup is separately gated: successful current lint, fresh status pro
 | Skill | Purpose |
 | --- | --- |
 | `grace-init` | Bootstrap the `.grace` skeleton, templates, and agent guidance |
-| `grace-spec` | Create an approved GRACE 4 change spec and optional design context |
-| `grace-plan` | Design assertions, scopes, tasks, and verification gates from an approved spec |
+| `grace-spec` | Interview the user, record the user's decisions in design context, and draft a GRACE 4 change spec |
+| `grace-plan` | Draft assertions, scopes, tasks, and verification gates beside the draft spec, with no approval between them |
+| `grace-brief` | Audit a draft spec-and-plan pair independently, brief the owner, and record the approval |
 | `grace-execute` | Execute the approved plan in sequential or parallel-safe mode |
 | `grace-refactor` | Rename, move, split, merge, and extract modules without artifact drift |
 | `grace-setup-subagents` | Scaffold GRACE worker and reviewer presets |
@@ -121,6 +123,7 @@ Migration cleanup is separately gated: successful current lint, fresh status pro
 | `grace lint --path <root> --assertions current` | Run the pre-implementation full-project check, including baselines of active approved changes; do not use it as post-edit target/final evidence |
 | `grace lint --path <root> --change C-ID --assertions target \| final --run-commands` | Execute declared `MustPassCommand` gates with compact progress on stderr, per-command timings, a default 600s per-command timeout (`--command-timeout`), and full run logs under `~/.cache/grace/run-commands/` (`--keepRuns` bounds how many non-passing runs are kept) |
 | `grace lint --path <root> --change C-ID --assertions baseline [--run-commands]` | Validate the immutable selected baseline before implementation; command assertions run only when explicitly enabled |
+| `grace lint --path <root> --change C-ID --assertions baseline --draft [--run-commands]` | Pre-approval check of a draft plan's baselines, recorded as `selectedPlanStatus: draft`; opt-in only, the plain baseline run still accepts an approved pair alone, and a draft run is never an execution baseline |
 | `grace lint --path <root> --change C-ID --assertions target --run-commands` | Validate selected target assertions and explicitly opt into `MustPassCommand` execution |
 | `grace lint --path <root> --change C-ID --assertions final [--run-commands]` | Run the final full-project gate, evaluate the selected target, and keep unrelated approved baselines active without re-evaluating the selected baseline |
 | `grace lint --path <root> --parallel-preflight` | Run the explicit approved-plan scope coexistence gate required for parallel-safe execution |

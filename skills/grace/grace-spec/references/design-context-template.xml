@@ -8,6 +8,14 @@
   <DeferredDecisions>
     <Decision>$DEFERRED_DECISION</Decision>
   </DeferredDecisions>
+  <OwnerDecisions>
+    <Decision>
+      <Date>$DECISION_DATE</Date>
+      <Question>$OWNER_QUESTION</Question>
+      <Chosen>$CHOSEN_OPTION</Chosen>
+      <Rejected>$REJECTED_OPTION</Rejected>
+    </Decision>
+  </OwnerDecisions>
   <Scenarios>
     <Scenario>$SCENARIO</Scenario>
   </Scenarios>

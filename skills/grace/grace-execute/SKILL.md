@@ -5,7 +5,7 @@ description: Execute an approved GRACE 4 GraceChangePlan in sequential or parall
 
 <skill>
 <preflight>
-Require one active bundle with approved, identity-matched `spec.xml` and `plan.xml`. Approved plans are immutable. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them. Read context, projections, assertions, scopes, task dependencies, and verification before editing. Reject phase-incompatible plans before writes: `MustPassCommand` must be leaf project evidence, and neither target assertions nor post-write task verification may invoke `--assertions current` or nest GRACE lifecycle commands. Supersede and replan instead of editing an approved conflict in place.
+Require one active bundle with approved, identity-matched `spec.xml` and `plan.xml`. Start only on an explicit owner order to execute: approval of the pair and the order to execute are two separate owner statements, and the approval is not the execution order, even when both arrive in one message, unless the message says to execute. Approved plans are immutable. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them. Read context, projections, assertions, scopes, task dependencies, and verification before editing. Reject phase-incompatible plans before writes: `MustPassCommand` must be leaf project evidence, and neither target assertions nor post-write task verification may invoke `--assertions current` or nest GRACE lifecycle commands. Supersede and replan instead of editing an approved conflict in place.
 </preflight>
 
 <assertion_commands>
@@ -28,14 +28,14 @@ Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only aft
 2. Ask the user. Propose the smallest widening or amendment that still meets the spec.
 3. After the user agrees, commit the widening alone; its body names the user's agreement and lists the admitted files. Commit an amendment alone; its body names the user's agreement and the changed tasks.
 4. Write the admitted files only after that commit.
-5. Change `BaselineAssertions`, `TargetAssertions` and `DurableScope` through a superseding bundle, never in place.
+5. Change `BaselineAssertions`, `TargetAssertions` and `DurableScope` through a superseding bundle, or through a re-approval before the first commit that writes outside `.grace/`; never in place. Re-approve through `$grace-brief`.
 </scope_widening>
 
 <commit_contract>
 - End every commit made for a change with one trailer paragraph that holds `Change: <C-ID>`, once per change the commit serves.
 - Put `Change: <C-ID>` in the same final paragraph as `Co-Authored-By` and any other trailers, with no blank line and no prose between them.
 - Treat a `Change:` line anywhere else as prose; it is not a trailer.
-- Commit the approved `plan.xml` in or before the first commit that writes outside `.grace/`.
+- Commit the approved `plan.xml` before the first commit that writes outside `.grace/`.
 - Run `grace status` before each commit; stop and report unexplained files.
 - Treat a committed-scope error other than `scope.approval-uncommitted` and `scope.committed-check-failed` as fixed in history, since no new commit clears it: stop and report it to the user, who chooses between rewriting unpublished history and superseding the bundle.
 </commit_contract>

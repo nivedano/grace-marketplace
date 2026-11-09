@@ -19,7 +19,7 @@ Every file starts with:
 // END_MODULE_CONTRACT
 ```
 
-The contract is written before the code. It comes from the GraceChangeSpec (`.grace/changes/active/*/spec.xml`), which was approved by the user during the `$grace-spec` phase.
+The contract is written before the code. It comes from the GraceChangeSpec (`.grace/changes/active/*/spec.xml`). `$grace-spec` and `$grace-plan` write it and the GraceChangePlan as a draft pair, the `$grace-brief` audit checks the pair, and one owner approval sets both to `approved`. Start `$grace-execute` only on a separate explicit owner order: the approval is not the execution order, even when both arrive in one message, unless the message says to execute.
 
 Name things semantically. A contract is much stronger when its module names, PURPOSE text, and block labels already encode the intended transformation instead of forcing the agent to infer it from abstract placeholders.
 
@@ -55,7 +55,7 @@ Requirements (.grace/context/requirements.xml)
 
 Never jump levels. If requirements are unclear — stop and clarify with the user.
 
-Approved plans are immutable execution evidence. If baseline/target assertions or `DurableScope` need to change after approval, create a replacement `C-*` bundle and mark the old bundle superseded; do not refresh an approved plan in place. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them.
+Approved plans are immutable execution evidence. If baseline/target assertions or `DurableScope` need to change after approval, change them through a superseding bundle, or through a re-approval before the first commit that writes outside `.grace/`; never in place. To supersede, create a replacement `C-*` bundle and mark the old bundle superseded. A re-approval returns `plan.xml` to draft, then repeats through `$grace-brief` the owner's approval, preceded by the audit when `plan.xml` changed beyond its root `status`. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them.
 
 ## Governed Autonomy (PCAM)
 

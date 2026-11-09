@@ -6,8 +6,9 @@ import { describe, expect, it } from "bun:test";
 import { commit, createRepo, plan as gitPlan, spec as gitSpec } from "./grace4/git-fixture";
 import { projectSlug } from "./grace4/run-log-store";
 import { writeMinimalGrace4Project as writeGit4Project } from "./grace4/test-fixtures";
-import { formatTextReport, lintGraceProject, parseCommandTimeoutMs, parseKeepRuns, resolveCommandVerbosity } from "./grace-lint";
+import { formatTextReport, lintGraceProject, parseCommandTimeoutMs, parseKeepRuns, resolveCommandVerbosity, resolveDraftFlag } from "./grace-lint";
 import { getLintIssueGuide } from "./lint/catalog";
+import { GraceCommandError } from "./query/errors";
 import { committedScopeExemptGlobs, loadGraceLintConfig, resolveRunLogRetention } from "./lint/config";
 
 function createProject() {
@@ -79,12 +80,13 @@ function writeApprovedChange(
   baselineAssertions: string,
   targetAssertions: string,
   status: "draft" | "approved" = "approved",
+  specStatus: "draft" | "approved" = "approved",
 ) {
   const bundle = `.grace/changes/active/${changeId}`;
   writeProjectFile(
     root,
     `${bundle}/spec.xml`,
-    `<GraceChangeSpec graceVersion="4.0" status="approved"><${changeId}><Summary>Selected change.</Summary><Goals><Goal>Exercise assertions.</Goal></Goals><Constraints><Constraint>Preserve fixture validity.</Constraint></Constraints><NonGoals><NonGoal>Unrelated behavior.</NonGoal></NonGoals><AcceptanceCriteria><Criterion>Assertions are evaluated.</Criterion></AcceptanceCriteria><AffectedAreas><M-EXAMPLE /></AffectedAreas><VerificationIntent><ExpectedCommand>bun test</ExpectedCommand></VerificationIntent></${changeId}></GraceChangeSpec>`,
+    `<GraceChangeSpec graceVersion="4.0" status="${specStatus}"><${changeId}><Summary>Selected change.</Summary><Goals><Goal>Exercise assertions.</Goal></Goals><Constraints><Constraint>Preserve fixture validity.</Constraint></Constraints><NonGoals><NonGoal>Unrelated behavior.</NonGoal></NonGoals><AcceptanceCriteria><Criterion>Assertions are evaluated.</Criterion></AcceptanceCriteria><AffectedAreas><M-EXAMPLE /></AffectedAreas><VerificationIntent><ExpectedCommand>bun test</ExpectedCommand></VerificationIntent></${changeId}></GraceChangeSpec>`,
   );
   writeProjectFile(
     root,
@@ -570,6 +572,20 @@ function Publish-Artifacts {
     // Draft active plan should NOT fire assertion.MustExist
     const result = await lintGraceProject(root);
     expect(result.issues.filter((issue) => issue.code === "assertion.MustExist")).toHaveLength(0);
+  });
+
+  it("lets a draft plan sit beside a draft spec but not an approved plan", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeApprovedChange(root, "C-PAIR", `<MustExist><Value>M-EXAMPLE</Value></MustExist>`, `<MustVerify><Module>M-EXAMPLE</Module></MustVerify>`, "draft");
+    const specPath = path.join(root, ".grace/changes/active/C-PAIR/spec.xml");
+    writeFileSync(specPath, readFileSync(specPath, "utf8").replace('status="approved"', 'status="draft"'));
+
+    expect((await lintGraceProject(root)).issues.map((issue) => issue.code)).not.toContain("change.plan-requires-approved-spec");
+
+    const planPath = path.join(root, ".grace/changes/active/C-PAIR/plan.xml");
+    writeFileSync(planPath, readFileSync(planPath, "utf8").replace('status="draft"', 'status="approved"'));
+    expect((await lintGraceProject(root)).issues.map((issue) => issue.code)).toContain("change.plan-requires-approved-spec");
   });
 
   it("fails active approved plans with failing BaselineAssertions", async () => {
@@ -1080,6 +1096,7 @@ describe("committed-scope check in final mode", () => {
       "scope.committed-check-skipped",
       "scope.reapproval-changed-gates",
       "scope.committed-check-failed",
+      "scope.reapproval-after-write",
     ];
     const prefixTitle = getLintIssueGuide("scope.unknown-code").title;
     for (const code of codes) {
@@ -1123,5 +1140,195 @@ describe("committed-scope check in final mode", () => {
     expect(getLintIssueGuide("scope.approval-uncommitted").remediation.join(" ")).toContain(
       "in or before the first commit that writes outside .grace/",
     );
+  });
+});
+
+describe("draft baseline", () => {
+  const HOLDS = `<MustExist><Value>M-EXAMPLE</Value></MustExist>`;
+  const FAILS = `<MustExist><Value>M-NONEXISTENT</Value></MustExist>`;
+  const TARGET = `<MustExist><Value>M-EXAMPLE</Value></MustExist>`;
+
+  function draftProject(changeId: string, baseline: string, plan: "draft" | "approved", spec: "draft" | "approved", target = TARGET) {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeApprovedChange(root, changeId, baseline, target, plan, spec);
+    return root;
+  }
+
+  const codes = (result: { issues: { code: string }[] }) => result.issues.map((issue) => issue.code);
+
+  it("evaluates a draft/draft bundle's baselines under --draft", async () => {
+    const pass = await lintGraceProject(draftProject("C-DD-PASS", HOLDS, "draft", "draft"), { assertionMode: "baseline", changeId: "C-DD-PASS", draft: true });
+    expect(pass.summary.errors).toBe(0);
+    expect(pass.selectedPlanStatus).toBe("draft");
+
+    const fail = await lintGraceProject(draftProject("C-DD-FAIL", FAILS, "draft", "draft"), { assertionMode: "baseline", changeId: "C-DD-FAIL", draft: true });
+    expect(codes(fail)).toContain("assertion.MustExist");
+    expect(codes(fail)).not.toContain("assertion.change-not-approved");
+    expect(fail.selectedPlanStatus).toBe("draft");
+  });
+
+  it("evaluates an approved-spec/draft-plan bundle under --draft", async () => {
+    const pass = await lintGraceProject(draftProject("C-AD-PASS", HOLDS, "draft", "approved"), { assertionMode: "baseline", changeId: "C-AD-PASS", draft: true });
+    expect(pass.summary.errors).toBe(0);
+    expect(pass.selectedPlanStatus).toBe("draft");
+
+    const fail = await lintGraceProject(draftProject("C-AD-FAIL", FAILS, "draft", "approved"), { assertionMode: "baseline", changeId: "C-AD-FAIL", draft: true });
+    expect(codes(fail)).toContain("assertion.MustExist");
+    expect(fail.selectedPlanStatus).toBe("draft");
+  });
+
+  it("prints a draft line in the text report", async () => {
+    const result = await lintGraceProject(draftProject("C-TEXT", HOLDS, "draft", "draft"), { assertionMode: "baseline", changeId: "C-TEXT", draft: true });
+    expect(formatTextReport(result)).toContain("Selected plan: draft");
+    const approved = await lintGraceProject(draftProject("C-TEXT-OK", HOLDS, "approved", "approved"), { assertionMode: "baseline", changeId: "C-TEXT-OK", draft: true });
+    expect(formatTextReport(approved)).not.toContain("Selected plan: draft");
+  });
+
+  it("records selectedPlanStatus in meta.json", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeProjectFile(root, "gate-ok.js", `console.log("ok");\n`);
+    writeApprovedChange(root, "C-META", `<MustPassCommand><Command>${process.execPath} gate-ok.js</Command></MustPassCommand>`, TARGET, "draft", "draft");
+    const logRoot = testCommandLogRoot();
+    const result = await lintGraceProject(root, {
+      assertionMode: "baseline",
+      changeId: "C-META",
+      draft: true,
+      runCommands: true,
+      commandProgress: () => {},
+      commandLogRoot: logRoot,
+    });
+    expect(result.summary.errors).toBe(0);
+    expect(result.commands).toHaveLength(1);
+    const runs = path.join(logRoot, projectSlug(root), "runs");
+    const meta = JSON.parse(readFileSync(path.join(runs, readdirSync(runs)[0], "meta.json"), "utf8"));
+    expect(meta.selectedPlanStatus).toBe("draft");
+    expect(meta.schemaVersion).toBe("1.2.0");
+    expect(meta.assertionMode).toBe("baseline");
+  });
+
+  it("errors on MustPassCommand without --run-commands under --draft", async () => {
+    const root = draftProject("C-NOCMD", `<MustPassCommand><Command>exit 0</Command></MustPassCommand>`, "draft", "draft");
+    const result = await lintGraceProject(root, { assertionMode: "baseline", changeId: "C-NOCMD", draft: true });
+    expect(codes(result)).toContain("assertion.command-not-evaluated");
+    expect(result.summary.errors).toBeGreaterThan(0);
+  });
+
+  it("still refuses a draft without --draft", async () => {
+    const root = draftProject("C-PLAIN", HOLDS, "draft", "draft");
+    const result = await lintGraceProject(root, { assertionMode: "baseline", changeId: "C-PLAIN" });
+    expect(codes(result)).toContain("assertion.change-not-approved");
+    expect(result.selectedPlanStatus).toBeUndefined();
+    const half = draftProject("C-PLAIN-AD", HOLDS, "draft", "approved");
+    expect(codes(await lintGraceProject(half, { assertionMode: "baseline", changeId: "C-PLAIN-AD" }))).toContain("assertion.change-not-approved");
+  });
+
+  it("states the draft acceptance rule in change-not-approved under --draft", async () => {
+    const draftRule = "or, with --draft, a draft plan.xml beside a draft or approved spec.xml";
+    const notApproved = (result: Awaited<ReturnType<typeof lintGraceProject>>) =>
+      result.issues.find((issue) => issue.code === "assertion.change-not-approved")!.message;
+    // An approved plan beside a draft spec is refused under --draft as well.
+    const root = draftProject("C-MSG", HOLDS, "approved", "draft");
+    expect(notApproved(await lintGraceProject(root, { assertionMode: "baseline", changeId: "C-MSG", draft: true }))).toContain(draftRule);
+    expect(notApproved(await lintGraceProject(root, { assertionMode: "baseline", changeId: "C-MSG" }))).not.toContain("--draft");
+  });
+
+  it("still refuses a draft in target and final", async () => {
+    const root = draftProject("C-TF", HOLDS, "draft", "draft");
+    for (const assertionMode of ["target", "final"] as const) {
+      const withFlag = await lintGraceProject(root, { assertionMode, changeId: "C-TF", draft: true });
+      expect(codes(withFlag)).toContain("assertion.change-not-approved");
+      expect(withFlag.selectedPlanStatus).toBeUndefined();
+      expect(codes(await lintGraceProject(root, { assertionMode, changeId: "C-TF" }))).toContain("assertion.change-not-approved");
+    }
+  });
+
+  it("rejects --draft outside baseline mode", () => {
+    for (const mode of ["current", "target", "final"] as const) {
+      let thrown: unknown;
+      try {
+        resolveDraftFlag(true, mode);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(GraceCommandError);
+      expect((thrown as GraceCommandError).code).toBe("invalid-arguments");
+    }
+    expect(resolveDraftFlag(true, "baseline")).toBe(true);
+    expect(resolveDraftFlag(false, "target")).toBe(false);
+    expect(resolveDraftFlag(undefined, "current")).toBe(false);
+  });
+
+  it("runs a normal baseline for --draft on an approved pair", async () => {
+    const result = await lintGraceProject(draftProject("C-APPROVED", HOLDS, "approved", "approved"), { assertionMode: "baseline", changeId: "C-APPROVED", draft: true });
+    expect(result.summary.errors).toBe(0);
+    expect(result.selectedPlanStatus).toBe("approved");
+  });
+
+  it("reports change-not-approved for a missing bundle under --draft", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    const missing = await lintGraceProject(root, { assertionMode: "baseline", changeId: "C-NOPE", draft: true });
+    expect(codes(missing)).toContain("assertion.change-not-approved");
+    expect(missing.selectedPlanStatus).toBeUndefined();
+
+    writeProjectFile(
+      root,
+      ".grace/changes/active/C-NOPLAN/spec.xml",
+      `<GraceChangeSpec graceVersion="4.0" status="draft"><C-NOPLAN><Summary>Spec only.</Summary></C-NOPLAN></GraceChangeSpec>`,
+    );
+    const noPlan = await lintGraceProject(root, { assertionMode: "baseline", changeId: "C-NOPLAN", draft: true });
+    expect(codes(noPlan)).toContain("assertion.change-not-approved");
+    expect(noPlan.selectedPlanStatus).toBeUndefined();
+  });
+});
+
+describe("design-context OwnerDecisions", () => {
+  const TEMPLATE = path.join(import.meta.dir, "..", "skills/grace/grace-spec/references/design-context-template.xml");
+
+  function bundleProject(changeId: string) {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeApprovedChange(root, changeId, `<MustExist><Value>M-EXAMPLE</Value></MustExist>`, `<MustVerify><Module>M-EXAMPLE</Module></MustVerify>`, "draft", "draft");
+    return root;
+  }
+
+  it("accepts a fixture built from design-context-template.xml", async () => {
+    const template = readFileSync(TEMPLATE, "utf8");
+    expect(template).toContain("<OwnerDecisions>");
+    const root = bundleProject("C-TEMPLATE");
+    writeProjectFile(root, ".grace/changes/active/C-TEMPLATE/design-context.xml", template.replaceAll("C-CHANGE-ID", "C-TEMPLATE"));
+
+    const result = await lintGraceProject(root);
+    expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(result.issues.filter((issue) => issue.code.startsWith("design-context."))).toEqual([]);
+  });
+
+  it("accepts OwnerDecisions with non-ASCII text", async () => {
+    const decisions =
+      "<OwnerDecisions><Decision><Date>2026-11-09</Date>" +
+      "<Question>Входит ли изменение размера окна под оверлеем в это изменение?</Question>" +
+      "<Chosen>Нет. Записано как оставшаяся половина iss-0122.</Chosen>" +
+      "<Rejected>Добавить захваты краёв поверх стека оверлеев.</Rejected>" +
+      "</Decision></OwnerDecisions>";
+    const root = bundleProject("C-CYRILLIC");
+    writeProjectFile(
+      root,
+      ".grace/changes/active/C-CYRILLIC/design-context.xml",
+      `<GraceChangeDesignContext graceVersion="4.0"><Change>C-CYRILLIC</Change><NormativeStatus>non-normative</NormativeStatus>${decisions}</GraceChangeDesignContext>`,
+    );
+    const wrapped = bundleProject("C-WRAPPED");
+    writeProjectFile(
+      wrapped,
+      ".grace/changes/active/C-WRAPPED/design-context.xml",
+      `<GraceChangeDesignContext graceVersion="4.0"><C-WRAPPED><NormativeStatus>non-normative</NormativeStatus>${decisions}</C-WRAPPED></GraceChangeDesignContext>`,
+    );
+
+    for (const project of [root, wrapped]) {
+      const result = await lintGraceProject(project);
+      expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+      expect(result.issues.filter((issue) => issue.code.startsWith("design-context."))).toEqual([]);
+    }
   });
 });

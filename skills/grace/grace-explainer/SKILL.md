@@ -15,10 +15,11 @@ GRACE 4 uses `.grace` as the durable project model:
 
 <workflow>
 1. `grace-init` creates the `.grace` skeleton.
-2. `grace-spec` creates an active change spec and waits for approval.
-3. `grace-plan` creates assertions, scopes, and `T-*` implementation tasks.
-4. `grace-execute` runs sequential or parallel-safe mode from the approved plan.
-5. `grace lint` and `grace status` provide validation and health evidence.
-6. Existing GRACE 3 projects use `grace-migrate`; the CLI validates the result but does not convert legacy docs directly.
+2. `grace-spec` interviews the user, records the user's decisions in `design-context.xml`, and writes `spec.xml` as `draft`.
+3. `grace-plan` writes `plan.xml` as `draft` in the same session; no approval sits between the two drafts. It holds assertions, scopes, and `T-*` implementation tasks.
+4. `grace-brief` runs the draft baseline lint and an independent audit of the draft pair, and shows the owner a one-screen brief; one owner approval sets `spec.xml` and `plan.xml` to `approved` in one commit that touches only `.grace/`.
+5. `grace-execute` runs sequential or parallel-safe mode from the approved plan. Start `$grace-execute` only on a separate explicit owner order: the approval is not the execution order, even when both arrive in one message, unless the message says to execute.
+6. `grace lint` and `grace status` provide validation and health evidence.
+7. Existing GRACE 3 projects use `grace-migrate`; the CLI validates the result but does not convert legacy docs directly.
 </workflow>
 </skill>

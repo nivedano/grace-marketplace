@@ -58,6 +58,15 @@ function resolveAssertionMode(value: unknown): LintAssertionMode {
   return mode;
 }
 
+/** Validates --draft: it only widens `--assertions baseline`, so any other mode is an argument error. */
+export function resolveDraftFlag(value: unknown, mode: LintAssertionMode): boolean {
+  const draft = Boolean(value);
+  if (draft && mode !== "baseline") {
+    throw new GraceCommandError("invalid-arguments", `--draft applies only with \`--assertions baseline\`, not \`${mode}\`.`);
+  }
+  return draft;
+}
+
 function shouldFail(result: LintResult, failOn: string) {
   if (failOn === "never") {
     return false;
@@ -116,6 +125,11 @@ export const lintCommand = defineCommand({
       description: "Assertion mode: current (pre-write active baselines), baseline, target, or final",
       default: "current",
     },
+    draft: {
+      type: "boolean",
+      description: "With --assertions baseline: also accept a draft plan (pre-approval check)",
+      default: false,
+    },
     runCommands: {
       type: "boolean",
       description: "Execute MustPassCommand assertions for the selected change",
@@ -153,6 +167,7 @@ export const lintCommand = defineCommand({
       const profile = resolveProfile(context.args.profile);
       const failOn = resolveFailOn(context.args.failOn);
       const assertionMode = resolveAssertionMode(context.args.assertions);
+      const draft = resolveDraftFlag(context.args.draft, assertionMode);
       if (!isValidTextFormat(format)) {
         throw new GraceCommandError("invalid-arguments", `Unsupported format \`${format}\`. Use \`text\` or \`json\`.`);
       }
@@ -189,6 +204,7 @@ export const lintCommand = defineCommand({
           profile,
           assertionMode,
           changeId: context.args.change ? String(context.args.change) : undefined,
+          draft,
           runCommands: Boolean(context.args.runCommands),
           parallelPreflight: Boolean(context.args.parallelPreflight),
           commandTimeoutMs: timeoutMs,

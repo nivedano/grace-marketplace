@@ -43,6 +43,8 @@ export type LintResult = {
   commandsEnabled: boolean;
   /** Present when --run-commands executed at least one declared command. */
   commands?: CommandEvidence[];
+  /** Present when a selected assertion mode resolved a plan: `draft` only for a baseline run under --draft. */
+  selectedPlanStatus?: "approved" | "draft";
   /** Present in final mode when the selected change resolved to an approved plan. */
   committedScope?: CommittedScopeReport;
   filesChecked: number;
@@ -60,6 +62,8 @@ export type LintOptions = {
   profile?: LintProfile;
   assertionMode?: LintAssertionMode;
   changeId?: string;
+  /** With baseline mode, also accept a draft plan (pre-approval check). Ignored in other modes. */
+  draft?: boolean;
   runCommands?: boolean;
   parallelPreflight?: boolean;
   /** Per-command timeout in ms for --run-commands; default 600000, 0 disables. */
