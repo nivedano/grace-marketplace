@@ -13,4 +13,14 @@ Generated subagents must be told to:
 - never mutate approved plans or XML statuses without controller approval;
 - return verification evidence and scoped graph/verification deltas.
 </subagent_requirements>
+
+<roles>
+Install each preset from `references/roles/<role>.md`:
+
+- `module-implementer`: implements one planned module or bounded module slice inside its write scope;
+- `contract-reviewer`: verifies one module implementation against its approved contract;
+- `verification-reviewer`: decides whether a module's automated verification suffices for autonomous execution;
+- `fixer`: repairs one failure packet inside the assigned write scope;
+- `auditor`: audits one draft change bundle against the owner's recorded decisions and the project's rules, and returns its brief; read-only.
+</roles>
 </skill>

@@ -280,3 +280,57 @@ describe("grace-brief auditor role", () => {
     expect(template.replaceAll("<C-ID>", "")).not.toContain("C-ID");
   });
 });
+
+describe("grace-setup-subagents auditor preset", () => {
+  const SETUP_DIR = "skills/grace/grace-setup-subagents";
+  const PRESET_PATH = `${SETUP_DIR}/references/roles/auditor.md`;
+  const preset = read(PRESET_PATH);
+  const role = read(`${BRIEF_DIR}/references/auditor-role.md`);
+
+  it("names auditor in the role list of the skill", () => {
+    const roles = block(read(`${SETUP_DIR}/SKILL.md`), "roles");
+    expectAll(roles, ["`auditor`", "`contract-reviewer`", "`fixer`", "`module-implementer`", "`verification-reviewer`"]);
+  });
+
+  it("mirrors the preset byte-for-byte", () => {
+    for (const file of [PRESET_PATH, `${SETUP_DIR}/SKILL.md`]) {
+      const packaged = path.join(repoRoot, "plugins/grace", file);
+      expect(existsSync(packaged)).toBe(true);
+      expect(readFileSync(packaged).equals(readFileSync(path.join(repoRoot, file)))).toBe(true);
+    }
+  });
+
+  it("carries the check list of the skill's role text unchanged", () => {
+    expect(block(preset, "checks")).toBe(block(role, "checks"));
+  });
+
+  it("carries the whole role text of the skill unchanged and adds its own sections after it", () => {
+    expect(preset.startsWith(role.trimEnd())).toBe(true);
+    for (const heading of ["Inputs", "Read-only", "Checks", "Re-approval", "Brief"]) {
+      expect(section(preset, heading)).toBe(section(role, heading));
+    }
+  });
+
+  it("is read-only and works from the inputs the design lists", () => {
+    expectAll(section(preset, "Read-only"), ["Edit no file, set no status, commit nothing."]);
+    expectAll(section(preset, "Inputs"), [
+      "the bundle path and the project root, nothing else",
+      "the bundle: `spec.xml`, `design-context.xml` when present, and `plan.xml`",
+      "`.grace/context`",
+      "the graph and verification indexes and the documents they route",
+      "the `plan.xml` of every other bundle under `.grace/changes/active/`",
+      "the documents `.grace/context` names, or, without such a reference, the rule documents `AGENTS.md` names",
+      "the last approved `plan.xml`",
+    ]);
+  });
+
+  it("is never given the authoring transcript and says where it is installed from", () => {
+    expectAll(section(preset, "Independence"), [
+      "fresh subagent, never a fork of the authoring session",
+      "The authoring transcript is never given to you",
+    ]);
+    expectAll(section(preset, "Installation"), [
+      "installed from the `auditor-role.md` content of the `grace-brief` skill",
+    ]);
+  });
+});
