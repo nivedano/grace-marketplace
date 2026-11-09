@@ -9,7 +9,7 @@ You receive the bundle path and the project root, nothing else. Read:
 - the graph and verification indexes and the documents they route;
 - the `plan.xml` of every other bundle under `.grace/changes/active/`;
 - the project's rule and contract corpus: the documents `.grace/context` names, or, without such a reference, the rule documents `AGENTS.md` names;
-- for a draft `plan.xml` beside an approved `spec.xml`, the last approved `plan.xml`, read from git at the newest commit in which it has `status="approved"`.
+- for a draft `plan.xml` beside an approved `spec.xml`, the last approved `plan.xml` (see Re-approval).
 
 Work from the artifacts alone. Ask for no authoring conversation and no author's summary; disregard any you are given.
 
@@ -26,7 +26,7 @@ Run the checks in order.
 2. Check `spec.xml` against the rule and contract corpus. Issue a finding for:
    - a `Goal` a rule forbids;
    - a behavioural contract the change alters with no `Goal` saying so;
-   - a `DurableScope` or `ObservedWriteScope` that exceeds `AffectedAreas`;
+   - a `DurableScope` or `ObservedWriteScope` path in an area a rule or behavioural contract forbids the change to touch;
    - a write to a `<wire_contracts>` copy or its `.source.json` with no `<Constraint>` naming the producer or consumer repository; `AffectedAreas` holds `M-*` modules only.
 3. Check `spec.xml` for internal consistency. Issue a finding for:
    - a `Goal` with no `Criterion`;
@@ -44,11 +44,11 @@ Run the checks in order.
 5. Check `ObservedWriteScope` against the `plan.xml` of every other active bundle; issue a finding for each overlap. Read the plans: `grace lint --parallel-preflight` compares approved pairs only, never a draft.
 </checks>
 
-Route each finding of checks 1 and 2 to section C, and each finding of checks 3 to 5 with two defensible readings. Route every other finding of checks 3 to 5 to section D.
+Route to section C each decision of check 1's first list, each finding of check 2, and each finding of checks 3 to 5 with two defensible readings. Turn check 1's second list into the `silent` theses of section A, not section-C items. Route every other finding of checks 3 to 5 to section D.
 
 ## Re-approval
 
-For a draft `plan.xml` beside an approved `spec.xml` with a last approved `plan.xml`, apply checks 4 and 5 to `plan.xml` as it stands and limit the brief to the change against the last approved `plan.xml`: sections changed, scope entries added or removed, tasks added, removed or rewritten, and gate sections changed. Put every change of `BaselineAssertions`, `TargetAssertions` or `DurableScope` in section C. Without a last approved `plan.xml`, audit the pair in full.
+Read the last approved `plan.xml` from git at the newest commit in which `plan.xml` has `status="approved"`. For a draft `plan.xml` beside an approved `spec.xml` with a last approved `plan.xml`, apply checks 4 and 5 to `plan.xml` as it stands and limit the brief to the change against the last approved `plan.xml`: sections changed, scope entries added or removed, tasks added, removed or rewritten, and gate sections changed. Put every change of `BaselineAssertions`, `TargetAssertions` or `DurableScope` in section C. Without a last approved `plan.xml`, audit the pair in full.
 
 ## Brief
 

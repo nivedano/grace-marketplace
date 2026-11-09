@@ -7,9 +7,9 @@ description: Audit a draft GRACE 4 spec-and-plan pair through an independent sub
 <purpose>Carry one active bundle from draft `spec.xml` and `plan.xml` to the owner's approval: draft checks, independent audit, brief, owner decision, approval commit. Do not implement code or execute the plan.</purpose>
 
 <preflight>
-- Require `.grace/changes/active/C-ID/` with identity-matched `spec.xml` and `plan.xml` that `grace status --path PROJECT` reports as `awaiting-approval` (both `draft`) or `needs-plan-approval` (`spec.xml` approved, `plan.xml` draft).
+- Require `.grace/changes/active/<C-ID>/` with identity-matched `spec.xml` and `plan.xml` that `grace status --path PROJECT` reports as `awaiting-approval` (both `draft`) or `needs-plan-approval` (`spec.xml` approved, `plan.xml` draft).
 - Run `grace lint --path PROJECT --assertions current`.
-- Run `grace lint --path PROJECT --change C-ID --assertions baseline --draft`; add `--run-commands` when `BaselineAssertions` declares `MustPassCommand`.
+- Run `grace lint --path PROJECT --change <C-ID> --assertions baseline --draft`; add `--run-commands` when `BaselineAssertions` declares `MustPassCommand`.
 - Run the project's own lint commands.
 - Fix every failure in the drafts and rerun the three checks before the audit.
 - Commit the draft bundle in a commit that touches only `.grace/` and ends with the `Change: <C-ID>` trailer, so the audit and the approval record name committed artifacts.
@@ -24,6 +24,7 @@ description: Audit a draft GRACE 4 spec-and-plan pair through an independent sub
 
 <brief_loop>
 - Fix every section-D finding in the drafts, rerun `<preflight>` with its commit, and dispatch a fresh audit; show the owner nothing while section D is non-empty.
+- Move to section C a section-D finding you cannot fix inside the bundle, such as a check-5 overlap with another active bundle's `plan.xml`.
 - Show the owner sections A to C, 60 lines or fewer, in the layout of `references/brief-template.md`, with the paths of `spec.xml` and `plan.xml`.
 </brief_loop>
 
@@ -33,7 +34,7 @@ description: Audit a draft GRACE 4 spec-and-plan pair through an independent sub
 - Record each answer in `design-context.xml` as one `Decision` under `OwnerDecisions`, with `Date`, `Question`, `Chosen`, and one `Rejected` per option not taken; create `design-context.xml` when absent.
 - On "send back", or on an answer that changes `spec.xml` or `plan.xml`, amend the drafts in place, rerun from `<preflight>` with its commit, and dispatch a fresh audit. Repeat until the owner approves.
 - Discard an approve selection made in a round whose answers change `spec.xml` or `plan.xml`; ask again after the fresh audit.
-- Only the owner approves. Treat the selection of an approve option, or a free-text approval naming the change, as the approval statement. Never set `status="approved"` without that statement.
+- Only the owner approves. Treat as the approval statement the selection of an approve option, or a free-text approval naming the change given after the brief is shown. Count a free-text approval as the option of the bundle's state: "approve <C-ID>: spec and plan" in `awaiting-approval`, "approve <C-ID>: plan" in `needs-plan-approval`. Never set `status="approved"` without that statement.
 </owner_decision>
 
 <approval_commit>
@@ -46,10 +47,10 @@ description: Audit a draft GRACE 4 spec-and-plan pair through an independent sub
   - the contradictions found and how each was resolved;
   - the owner's approval statement, quoted with its option text and change id;
   - how the audit ran: an independent subagent or self-audited;
-  - the lint runs the brief stood on: the draft bundle commit the audit read, the `--assertions current` result, and the `--assertions baseline --change C-ID --draft` result with whether commands ran;
+  - the lint runs the brief stood on: the draft bundle commit the audit read, the `--assertions current` result, and the `--assertions baseline --change <C-ID> --draft` result with whether commands ran;
   - when commands ran, the run-log path and the run's per-command result lines, quoted; when `BaselineAssertions` declares no `MustPassCommand`, "no commands";
   - for a re-approval, the last approved commit compared against, or "plan unchanged apart from its status; no audit ran".
-- When `.grace/context` names another place for approval records, write the record there and name that place in the commit body; never write it inside the bundle.
+- Keep the approval record in the commit body. When `.grace/context` names a place for approval records inside `.grace/` outside the bundle, also write a copy there in the same approval commit.
 </approval_commit>
 
 <execution_order>
@@ -67,10 +68,10 @@ description: Audit a draft GRACE 4 spec-and-plan pair through an independent sub
 </return_to_draft>
 
 <reapproval_audit>
-- For a `needs-plan-approval` bundle, read the last approved `plan.xml` from git: the newest commit in which it has `status="approved"`.
-- When `plan.xml` equals that version apart from its root `status`, dispatch no audit, ask only the approval question, and record "plan unchanged apart from its status; no audit ran".
+- For a `needs-plan-approval` bundle, find the last approved `plan.xml`. Read the last approved `plan.xml` from git at the newest commit in which `plan.xml` has `status="approved"`.
+- When `plan.xml` equals the last approved `plan.xml` apart from its root `status`, dispatch no audit, ask only the approval question, and record "plan unchanged apart from its status; no audit ran".
 - Otherwise dispatch the audit; the auditor applies checks 4 and 5 to `plan.xml` as it stands and limits the brief to the change against the last approved `plan.xml`.
-- Ask every change of `BaselineAssertions`, `TargetAssertions` or `DurableScope` as a section-C item.
-- With no last approved `plan.xml`, audit the pair in full; "approve <C-ID>: plan" still approves `plan.xml` alone, since `spec.xml` is already approved.
+- Put every change of `BaselineAssertions`, `TargetAssertions` or `DurableScope` in section C.
+- Without a last approved `plan.xml`, audit the pair in full. "approve <C-ID>: plan" still approves `plan.xml` alone, since `spec.xml` is already approved.
 </reapproval_audit>
 </skill>

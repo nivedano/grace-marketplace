@@ -5,7 +5,7 @@
 Show the owner sections A to C; section D goes to the author alone.
 
 ```text
-Brief C-ID: independent subagent | self-audited (the author audited its own drafts; weaker)
+Brief <C-ID>: independent subagent | self-audited (the author audited its own drafts; weaker)
 Draft bundle commit: <commit>
 Re-approval against: <commit> | none
 
@@ -43,17 +43,17 @@ Owner decisions:
 Contradictions:
 - <finding>: <resolution>
 
-Approval statement: "approve C-ID: spec and plan" | "approve C-ID: plan" | "<free-text approval>"
+Approval statement: "approve <C-ID>: spec and plan" | "approve <C-ID>: plan" | "<free-text approval>"
 Audit: independent subagent | self-audited
 
 Lint runs:
 - draft bundle commit: <commit>
 - --assertions current: <result>
-- --assertions baseline --change C-ID --draft: <result>; commands: ran | no commands
+- --assertions baseline --change <C-ID> --draft: <result>; commands: ran | no commands
 - run log: <path>
   <per-command result lines>
 
 Re-approval: compared against <commit> | plan unchanged apart from its status; no audit ran
 
-Change: C-ID
+Change: <C-ID>
 ```
