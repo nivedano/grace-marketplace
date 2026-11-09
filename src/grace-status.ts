@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { defineCommand, type CommandDef, runMain } from "citty";
 
+import { loadGraceLintConfig } from "./lint/config";
 import { lintGraceProject } from "./lint/core";
 import type { LintIssue } from "./lint/types";
 import { detectGraceProjectKind, formatGrace3MigrationGuidance, resolveGrace4Paths } from "./grace4/project";
@@ -14,6 +15,8 @@ import { parseGraceXmlArtifact, readGraceXmlArtifact } from "./grace4/xml";
 import { collectModuleHealth } from "./query/health";
 import { loadGraceArtifactIndex } from "./query/core";
 import { GraceCommandError, runGraceCommand } from "./query/errors";
+import { collectScenarioEvidence, type ScenarioEvidenceReport } from "./grace4/scenario-evidence";
+import { collectCodeFiles } from "./project-utils";
 import { formatModuleHealthTable } from "./query/render";
 import type { GraceArtifactIndex, ModuleHealthRecord } from "./query/types";
 
@@ -61,6 +64,8 @@ export type StatusResult = {
     unexplainedFiles: string[];
   };
   nextAction: string;
+  /** Scenario evidence totals and per-entry states; present for GRACE 4 projects. */
+  scenarioEvidence?: ScenarioEvidenceReport;
   migrationGuidance?: string;
   modules?: ModuleHealthRecord[];
   moduleHealthLoadError?: string;
@@ -244,6 +249,8 @@ export async function collectProjectStatus(
   const ownership = createDurableOwnershipIndex(graph, verification);
   const overlapIssues = detectScopeOverlaps(activeScopes, ownership);
   const unsafeIssues = detectUnsafeConcurrentExecution(activeScopes, ownership);
+  const scenarioCodeFiles = collectCodeFiles(root, [".grace", ...(loadGraceLintConfig(root).config?.ignoredDirs ?? [])]);
+  const scenarioEvidence = collectScenarioEvidence(root, verification, scenarioCodeFiles).report;
   const rawChanges = [
     ...collectChangeBundleStatuses(root, "active", paths.changesActiveDir, lint.issues),
     ...collectChangeBundleStatuses(root, "archive", paths.changesArchiveDir, lint.issues),
@@ -321,6 +328,7 @@ export async function collectProjectStatus(
     derivedStates: [...derivedStates].sort(),
     integrity: { errors: integrityErrors.length, warnings: integrityWarnings.length, topIssues: topIssues([...integrityErrors, ...integrityWarnings]) },
     observedDrift,
+    scenarioEvidence,
     modules,
     moduleHealthLoadError,
   };
@@ -366,10 +374,32 @@ export function formatStatusText(result: StatusResult) {
     `- Unexplained: ${result.observedDrift.unexplainedFiles.length}`,
   );
   for (const file of result.observedDrift.unexplainedFiles.slice(0, 10)) lines.push(`- unexplained: ${file}`);
+  if (result.scenarioEvidence) lines.push("", ...formatScenarioEvidenceText(result.scenarioEvidence));
   if (result.modules && result.modules.length > 0) lines.push("", "Module Health", formatModuleHealthTable(result.modules));
   if (result.moduleHealthLoadError) lines.push("", "Module Health", `- unavailable: ${result.moduleHealthLoadError}`);
   lines.push("", "Suggested Next Action", `- ${result.nextAction}`);
   return lines.join("\n");
+}
+
+const UNPROVEN_SCENARIO_TEXT_LIMIT = 20;
+
+/** Scenario evidence totals, then the unproven scenarios capped at 20. */
+function formatScenarioEvidenceText(report: ScenarioEvidenceReport): string[] {
+  const { scenarios, executable, manualOnly, unproven, legacy } = report.totals;
+  const lines = [
+    "Scenario Evidence",
+    `- Scenarios: ${scenarios} (executable ${executable}, manual only ${manualOnly}, unproven ${unproven}, legacy ${legacy})`,
+  ];
+  const unprovenScenarios = report.entries.flatMap((entry) =>
+    entry.scenarios.filter((scenario) => scenario.state === "unproven").map((scenario) => ({ entry: entry.id, scenario })),
+  );
+  for (const { entry, scenario } of unprovenScenarios.slice(0, UNPROVEN_SCENARIO_TEXT_LIMIT)) {
+    lines.push(`- unproven: ${scenario.id} (${entry}) ${scenario.text}`.trimEnd());
+  }
+  if (unprovenScenarios.length > UNPROVEN_SCENARIO_TEXT_LIMIT) {
+    lines.push(`- ... ${unprovenScenarios.length - UNPROVEN_SCENARIO_TEXT_LIMIT} more unproven`);
+  }
+  return lines;
 }
 
 function collectObservedDrift(root: string, activeScopes: ActiveChangeScope[], routes: DriftRouteIndex): CollectedObservedDrift {

@@ -33,9 +33,23 @@ export type VerificationAnchorRecord = {
   cwd?: string;
   commands: string[];
   scenarios: string[];
+  scenarioRecords: ScenarioRecord[];
   markers: string[];
   traceAssertions: string[];
   testFiles: string[];
+};
+
+/** One <Scenario>: its SC-* id (null for legacy or malformed), its text, and its <ManualEvidence>. */
+export type ScenarioRecord = {
+  id: string | null;
+  text: string;
+  manualEvidence: string | null;
+};
+
+/** One <Scenario> with every direct SC-* child element as authored, for id validation. */
+export type ScenarioInspection = {
+  record: ScenarioRecord;
+  idElements: { tag: string; wellFormed: boolean }[];
 };
 
 /** Unified current verification projection independent of physical segmentation. */
@@ -236,6 +250,7 @@ export function buildVerificationProjection(paths: Grace4ProjectPaths, graph: Gr
         continue;
       }
 
+      const scenarioRecords = inspectEntryScenarios(node).map((inspection) => inspection.record);
       projection.entries.set(node.tag, {
         id: node.tag,
         moduleId: moduleIdForVerification(node.tag),
@@ -244,7 +259,8 @@ export function buildVerificationProjection(paths: Grace4ProjectPaths, graph: Gr
         priority: collectPriority(node),
         cwd: collectCwd(node, paths.root, route.file, projection.issues),
         commands: collectExactEvidence(node, "Command"),
-        scenarios: collectExactEvidence(node, "Scenario"),
+        scenarios: scenarioRecords.map((record) => record.text).filter(Boolean),
+        scenarioRecords,
         markers: collectExactEvidence(node, "Marker"),
         traceAssertions: collectExactEvidence(node, "TraceAssertion"),
         testFiles: collectTestFiles(node, paths.root, route.file, projection.issues),
@@ -413,7 +429,38 @@ function validateModuleVerificationCoverage(graph: GraphProjection, verification
   }
 }
 
-function collectExactEvidence(node: GraceXmlNode, tag: "Command" | "Scenario" | "Marker" | "TraceAssertion"): string[] {
+/**
+ * Inspects every <Scenario> under one V-M-* entry, in document order.
+ * A scenario without a direct SC-* child is legacy: its text is exactly the pre-id aggregate, and empty ones are dropped.
+ * Otherwise the text excludes the SC-* children and <ManualEvidence>; the id is the first SC-* child when well formed.
+ */
+export function inspectEntryScenarios(entry: GraceXmlNode): ScenarioInspection[] {
+  return [...walkNodes(entry)]
+    .filter((candidate) => candidate !== entry && candidate.tag === "Scenario")
+    .map(inspectScenario)
+    .filter((inspection) => inspection.idElements.length > 0 || inspection.record.text);
+}
+
+function inspectScenario(node: GraceXmlNode): ScenarioInspection {
+  const isIdElement = (child: GraceXmlNode) => child.tag.startsWith("SC-");
+  const idElements = node.children.filter(isIdElement).map((child) => ({
+    tag: child.tag,
+    wellFormed: ANCHOR_PATTERNS.scenario.test(child.tag)
+      && child.children.length === 0
+      && child.text.trim() === ""
+      && Object.keys(child.attributes).length === 0,
+  }));
+  const manualTexts = childNodes(node, "ManualEvidence").map((child) => aggregateNodeText(child).trim()).filter(Boolean);
+  const manualEvidence = manualTexts.length > 0 ? manualTexts.join(" ") : null;
+  if (idElements.length === 0) {
+    return { record: { id: null, text: aggregateNodeText(node).trim(), manualEvidence }, idElements };
+  }
+  const textNode = { ...node, children: node.children.filter((child) => !isIdElement(child) && child.tag !== "ManualEvidence") };
+  const first = idElements[0]!;
+  return { record: { id: first.wellFormed ? first.tag : null, text: aggregateNodeText(textNode).trim(), manualEvidence }, idElements };
+}
+
+function collectExactEvidence(node: GraceXmlNode, tag: "Command" | "Marker" | "TraceAssertion"): string[] {
   return [...walkNodes(node)]
     .filter((candidate) => candidate !== node && candidate.tag === tag)
     .map((candidate) => aggregateNodeText(candidate).trim())

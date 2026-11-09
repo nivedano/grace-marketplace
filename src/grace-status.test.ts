@@ -619,4 +619,30 @@ describe("grace status", () => {
     expect(Buffer.from(missing.stderr).toString("utf8")).toBe("");
     expect(JSON.parse(Buffer.from(missing.stdout).toString("utf8")).projectKind).toBe("none");
   });
+
+  it("prints the Scenario evidence section and caps unproven at 20", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    const unproven = Array.from({ length: 25 }, (_, index) => `<Scenario><SC-EXAMPLE-${String(index + 10).padStart(3, "0")} />Unproven ${index + 10}.</Scenario>`).join("");
+    writeProjectFile(
+      root,
+      ".grace/verification/main.xml",
+      `<GraceVerificationDocument graceVersion="4.0"><VD-MAIN><V-M-EXAMPLE><Command>bun test src/example.test.ts</Command><Scenario><SC-EXAMPLE-001 />Proven.</Scenario><Scenario><SC-EXAMPLE-002 />Bench.<ManualEvidence>Bench check.</ManualEvidence></Scenario><Scenario>example works</Scenario>${unproven}<Marker>[Example][run][BLOCK_RUN]</Marker></V-M-EXAMPLE></VD-MAIN></GraceVerificationDocument>`,
+    );
+    writeProjectFile(root, "tests/boot.test.ts", "// SC-EXAMPLE-001\n");
+
+    const result = await collectProjectStatus(root);
+    expect(result.integrity.errors).toBe(0);
+    expect(result.scenarioEvidence?.totals).toEqual({ scenarios: 28, executable: 1, manualOnly: 1, unproven: 25, legacy: 1 });
+    expect(result.scenarioEvidence?.entries.map((entry) => entry.id)).toEqual(["V-M-EXAMPLE"]);
+    expect(result.scenarioEvidence?.entries[0]?.scenarios[1]).toEqual({ id: "SC-EXAMPLE-002", text: "Bench.", manualEvidence: "Bench check.", state: "manualOnly" });
+
+    const text = formatStatusText(result);
+    expect(text).toContain("Scenario Evidence\n- Scenarios: 28 (executable 1, manual only 1, unproven 25, legacy 1)");
+    const unprovenLines = text.split("\n").filter((line) => line.startsWith("- unproven: "));
+    expect(unprovenLines).toHaveLength(20);
+    expect(unprovenLines[0]).toBe("- unproven: SC-EXAMPLE-010 (V-M-EXAMPLE) Unproven 10.");
+    expect(text).toContain("- ... 5 more unproven");
+    expect(text.indexOf("Scenario Evidence")).toBeLessThan(text.indexOf("Suggested Next Action"));
+  });
 });

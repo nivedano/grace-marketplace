@@ -636,4 +636,23 @@ const marker$Other = "[ProviderConfigPersistence][getProviderConfig][other]";`,
     expect(combinedOutput).toContain("Legacy GRACE 3 artifacts");
     expect(combinedOutput).toContain(".grace artifact model");
   });
+
+  it("verification output carries scenario ids", () => {
+    const root = createQueryProject();
+    writeProjectFile(
+      root,
+      ".grace/verification/main.xml",
+      `<GraceVerificationDocument graceVersion="4.0"><VD-MAIN><V-M-DB><Scenario>Database client is available.</Scenario></V-M-DB><V-M-PROVIDER-PERSIST><Priority>high</Priority><Command>bun test src/provider/config-repo.test.ts</Command><Scenario>Legacy first.</Scenario><Scenario><SC-PROVIDER-PERSIST-001 />Reads and writes provider config records.<ManualEvidence>Owner check.</ManualEvidence></Scenario><Scenario><SC-PROVIDER-PERSIST-002 />Writes are durable.</Scenario><Marker>[ProviderConfigPersistence][getProviderConfig][BLOCK_GET_PROVIDER_CONFIG]</Marker></V-M-PROVIDER-PERSIST></VD-MAIN></GraceVerificationDocument>`,
+    );
+
+    const index = loadGraceArtifactIndex(root);
+    expect(resolveVerification(index, "V-M-PROVIDER-PERSIST").verification.scenarios).toEqual([
+      { tag: "Scenario-1", text: "Legacy first.", manualEvidence: null },
+      { tag: "SC-PROVIDER-PERSIST-001", text: "Reads and writes provider config records.", manualEvidence: "Owner check." },
+      { tag: "SC-PROVIDER-PERSIST-002", text: "Writes are durable.", manualEvidence: null },
+    ]);
+    expect(resolveVerification(index, "V-M-DB").verification.scenarios).toEqual([
+      { tag: "Scenario-1", text: "Database client is available.", manualEvidence: null },
+    ]);
+  });
 });

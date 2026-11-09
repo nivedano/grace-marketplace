@@ -5,6 +5,7 @@ import { describe, expect, it } from "bun:test";
 
 import { resolveGrace4Paths } from "./project";
 import {
+  classifySemanticAnchorTag,
   validateArtifactRoot,
   validateChangeArtifact,
   validateChangeDesignContextArtifact,
@@ -187,6 +188,31 @@ describe("GRACE 4 Artifact Grammar", () => {
 
     const resultCodes = codes({ issues: validateSemanticAnchorDiscipline("anchors.xml", artifact.root!) });
     expect(resultCodes.filter((code) => code === "artifact.malformed-semantic-anchor")).toHaveLength(7);
+  });
+
+  it("classifies SC-FW-MAIN-002 as a canonical scenario anchor", () => {
+    expect(classifySemanticAnchorTag("SC-FW-MAIN-002")).toEqual({ kind: "canonical", family: "scenario" });
+    expect(classifySemanticAnchorTag("SC-X-001-002")).toEqual({ kind: "canonical", family: "scenario" });
+  });
+
+  it("flags a malformed SC- tag", () => {
+    expect(classifySemanticAnchorTag("SC-bad")).toEqual({ kind: "malformed", family: "scenario" });
+    expect(classifySemanticAnchorTag("SC-FW-MAIN-0021")).toEqual({ kind: "malformed", family: "scenario" });
+    const artifact = parseGraceXmlArtifact(
+      "anchors.xml",
+      `<GraceVerification graceVersion="4.0"><V-M-X><Scenario><SC-bad />text</Scenario></V-M-X></GraceVerification>`,
+    );
+    const resultCodes = codes({ issues: validateSemanticAnchorDiscipline("anchors.xml", artifact.root!) });
+    expect(resultCodes.filter((code) => code === "artifact.malformed-semantic-anchor")).toHaveLength(1);
+  });
+
+  it("flags an SC-* value in an attribute", () => {
+    const artifact = parseGraceXmlArtifact(
+      "anchors.xml",
+      `<GraceVerification graceVersion="4.0"><V-M-X><Scenario ref="SC-X-001" /></V-M-X></GraceVerification>`,
+    );
+    const resultCodes = codes({ issues: validateSemanticAnchorDiscipline("anchors.xml", artifact.root!) });
+    expect(resultCodes).toContain("artifact.semantic-anchor-attribute");
   });
 
   it("rejects attributes on canonical anchors and anchor-like attribute names or values", () => {
