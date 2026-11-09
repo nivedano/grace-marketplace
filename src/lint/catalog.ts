@@ -28,6 +28,11 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
     explanation: "`runLogRetention` in .grace-lint.json sets how many non-passing --run-commands log directories to keep, so it must be a non-negative integer.",
     remediation: ["Set runLogRetention to a non-negative integer, for example 25.", "Remove the key to use the default of 10."],
   },
+  "config.invalid-require-change-trailers": {
+    title: "Invalid Require Change Trailers",
+    explanation: "`requireChangeTrailers` in .grace-lint.json switches change-trailer requirements on or off, so it must be a boolean.",
+    remediation: ["Set requireChangeTrailers to true or false.", "Remove the key to use the default of false."],
+  },
   "analysis.adapter-failed": {
     title: "Language Adapter Failed",
     explanation: "The file-level export analysis adapter failed, so exact export/local parity could not be validated for this governed file.",

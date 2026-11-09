@@ -80,6 +80,8 @@ export type GraceLintConfig = {
   ignoredDirs?: string[];
   /** How many non-passing command-run directories survive pruning; default 10. */
   runLogRetention?: number;
+  /** Requires change trailers on commits; default false. */
+  requireChangeTrailers?: boolean;
 };
 
 export type MarkupSection = {

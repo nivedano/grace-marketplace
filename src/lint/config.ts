@@ -5,7 +5,7 @@ import { RUN_RETENTION } from "../grace4/run-log-store";
 import type { GraceLintConfig, LintIssue } from "./types";
 
 const CONFIG_FILE_NAME = ".grace-lint.json";
-const SUPPORTED_KEYS = new Set(["ignoredDirs", "runLogRetention"]);
+const SUPPORTED_KEYS = new Set(["ignoredDirs", "runLogRetention", "requireChangeTrailers"]);
 
 export function loadGraceLintConfig(projectRoot: string): { config: GraceLintConfig | null; issues: LintIssue[] } {
   const configPath = path.join(projectRoot, CONFIG_FILE_NAME);
@@ -36,7 +36,7 @@ export function loadGraceLintConfig(projectRoot: string): { config: GraceLintCon
         severity: "error",
         code: "config.unknown-key",
         file: CONFIG_FILE_NAME,
-        message: `Unsupported key \`${key}\` in ${CONFIG_FILE_NAME}. Supported keys: ignoredDirs, runLogRetention.`,
+        message: `Unsupported key \`${key}\` in ${CONFIG_FILE_NAME}. Supported keys: ignoredDirs, runLogRetention, requireChangeTrailers.`,
       });
     }
 
@@ -55,6 +55,15 @@ export function loadGraceLintConfig(projectRoot: string): { config: GraceLintCon
         code: "config.invalid-run-log-retention",
         file: CONFIG_FILE_NAME,
         message: `\`runLogRetention\` in ${CONFIG_FILE_NAME} must be a non-negative integer number of run directories.`,
+      });
+    }
+
+    if (parsed.requireChangeTrailers !== undefined && typeof parsed.requireChangeTrailers !== "boolean") {
+      issues.push({
+        severity: "error",
+        code: "config.invalid-require-change-trailers",
+        file: CONFIG_FILE_NAME,
+        message: `\`requireChangeTrailers\` in ${CONFIG_FILE_NAME} must be a boolean.`,
       });
     }
 

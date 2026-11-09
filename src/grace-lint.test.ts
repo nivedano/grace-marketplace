@@ -6,7 +6,7 @@ import { describe, expect, it } from "bun:test";
 import { projectSlug } from "./grace4/run-log-store";
 import { formatTextReport, lintGraceProject, parseCommandTimeoutMs, parseKeepRuns, resolveCommandVerbosity } from "./grace-lint";
 import { getLintIssueGuide } from "./lint/catalog";
-import { resolveRunLogRetention } from "./lint/config";
+import { loadGraceLintConfig, resolveRunLogRetention } from "./lint/config";
 
 function createProject() {
   return mkdtempSync(path.join(os.tmpdir(), "grace-lint-"));
@@ -808,6 +808,24 @@ describe("run-commands log retention", () => {
     const result = await lintGraceProject(root);
     expect(result.issues.map((issue) => issue.code)).toContain("config.invalid-run-log-retention");
     expect(resolveRunLogRetention(undefined, { runLogRetention: -5 })).toBe(10);
+  });
+
+  it("accepts requireChangeTrailers as a boolean", () => {
+    const root = createProject();
+    writeProjectFile(root, ".grace-lint.json", `{ "requireChangeTrailers": true }\n`);
+
+    const { config, issues } = loadGraceLintConfig(root);
+    expect(issues).toEqual([]);
+    expect(config?.requireChangeTrailers).toBe(true);
+  });
+
+  it("rejects a non-boolean requireChangeTrailers", () => {
+    const root = createProject();
+    writeProjectFile(root, ".grace-lint.json", `{ "requireChangeTrailers": "yes" }\n`);
+
+    const { issues } = loadGraceLintConfig(root);
+    expect(issues.map((issue) => issue.code)).toEqual(["config.invalid-require-change-trailers"]);
+    expect(issues[0].severity).toBe("error");
   });
 
   it("resolves retention precedence: flag, then config, then the default", () => {
