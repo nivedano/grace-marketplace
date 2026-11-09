@@ -891,4 +891,15 @@ describe("scenario evidence lint", () => {
     }
     expect(getLintIssueGuide("verification.other").title).toContain("Verification");
   });
+
+  it("gives verification structural codes a guide about the index, documents and wrappers", () => {
+    for (const code of ["verification.invalid-document-wrapper", "verification.index-invalid-documents-section"]) {
+      const guide = getLintIssueGuide(code);
+      expect(guide.title).toBe("Verification Document Drift");
+      const text = [guide.explanation, ...guide.remediation].join(" ");
+      expect(text).toContain("VD-*");
+      expect(text).toContain("wrapper");
+      expect(text).toContain("index");
+    }
+  });
 });

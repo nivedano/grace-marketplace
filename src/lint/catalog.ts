@@ -165,9 +165,9 @@ const PREFIX_GUIDES: Array<{ prefix: string; title: string; explanation: string;
   },
   {
     prefix: "verification.",
-    title: "GRACE 4 Verification Evidence Issue",
-    explanation: "A V-M-* verification entry's scenarios or their references from project files are inconsistent.",
-    remediation: ["Repair the scenario ids under .grace/verification.", "Keep SC-* references in tests in step with the scenarios they prove."],
+    title: "Verification Document Drift",
+    explanation: "The .grace/verification index or a verification document is malformed: the index lacks exactly one VerificationDocuments section, or a document lacks exactly one direct VD-* wrapper.",
+    remediation: ["Keep one VerificationDocuments section in the verification index and one direct VD-* wrapper per verification document, matching its index route.", "Keep V-M-* entries and their SC-* scenario ids directly under that wrapper."],
   },
 ];
 
