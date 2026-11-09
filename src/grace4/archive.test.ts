@@ -4,7 +4,8 @@ import path from "node:path";
 import { describe, expect, it } from "bun:test";
 
 import { lintGraceProject } from "../grace-lint";
-import { archiveChange, locateRootStartTag, rewriteRootStatusAttribute } from "./archive";
+import { archiveChange, formatArchiveText, locateRootStartTag, rewriteRootStatusAttribute } from "./archive";
+import { commit, createRepo, fixtureGit, plan, spec } from "./git-fixture";
 import { projectSlug } from "./run-log-store";
 import { writeChangeBundleFixture, writeMinimalGrace4Project } from "./test-fixtures";
 
@@ -340,5 +341,186 @@ describe("root status attribute rewriting", () => {
   it("refuses a root element with the wrong tag or a missing status attribute", () => {
     expect(() => rewriteRootStatusAttribute(`<Other status="approved"/>`, "spec.xml", "GraceChangeSpec", "approved", "applied")).toThrow(/root element is <Other>/);
     expect(() => rewriteRootStatusAttribute(`<GraceChangeSpec/>`, "spec.xml", "GraceChangeSpec", "approved", "applied")).toThrow(/carries 0 status attributes/);
+  });
+});
+
+describe("grace archive committed-scope integration", () => {
+  const ACTIVE_PLAN = `.grace/changes/active/${CHANGE_ID}/plan.xml`;
+  const ACTIVE_SPEC = `.grace/changes/active/${CHANGE_ID}/spec.xml`;
+
+  function owned(subject: string) {
+    return `${subject}\n\nChange: ${CHANGE_ID}`;
+  }
+
+  /** A git project seeded with a GRACE 4 skeleton; each case adds the change history. */
+  function seededProject(extra: Record<string, string> = {}) {
+    const root = createRepo();
+    writeMinimalGrace4Project(root);
+    commit(root, { "README.md": "fixture\n", ...extra }, "chore: seed");
+    return root;
+  }
+
+  function approve(root: string, scope: string[]) {
+    return commit(root, { [ACTIVE_SPEC]: spec(CHANGE_ID, "approved"), [ACTIVE_PLAN]: plan(CHANGE_ID, "approved", scope) }, owned("docs: approve"));
+  }
+
+  function cleanRunAtHead(logRoot: string, root: string) {
+    writeRun(logRoot, root, "2026-01-03T10-00-00_C-ARCHIVE", {
+      changeId: CHANGE_ID,
+      assertionMode: "final",
+      status: "passed",
+      startedAt: "2026-01-03T10:00:00.000Z",
+      finishedAt: "2026-01-03T10:01:00.000Z",
+      head: fixtureGit(root, ["rev-parse", "HEAD"]),
+      dirty: false,
+    });
+  }
+
+  const refusalCases: { code: string; file: string; build: (root: string) => void }[] = [
+    {
+      code: "scope.committed-outside",
+      file: "src/stray.ts",
+      build(root) {
+        approve(root, ["src/a.ts"]);
+        commit(root, { "src/stray.ts": "s\n" }, owned("feat: stray write"));
+      },
+    },
+    {
+      code: "scope.widening-with-code",
+      file: "src/b.ts",
+      build(root) {
+        approve(root, ["src/a.ts"]);
+        commit(root, { [ACTIVE_PLAN]: plan(CHANGE_ID, "approved", ["src/a.ts", "src/b.ts"]), "src/a.ts": "a\n" }, owned("docs: widen with code"));
+        commit(root, { "src/b.ts": "b\n" }, owned("feat: write b"));
+      },
+    },
+    {
+      code: "scope.written-before-widening",
+      file: "src/b.ts",
+      build(root) {
+        approve(root, ["src/a.ts"]);
+        commit(root, { "src/b.ts": "b\n" }, owned("feat: write b early"));
+        commit(root, { [ACTIVE_PLAN]: plan(CHANGE_ID, "approved", ["src/a.ts", "src/b.ts"]) }, owned("docs: widen late"));
+      },
+    },
+    {
+      code: "scope.written-before-approval",
+      file: "src/a.ts",
+      build(root) {
+        commit(root, { [ACTIVE_SPEC]: spec(CHANGE_ID, "approved"), [ACTIVE_PLAN]: plan(CHANGE_ID, "draft", ["src/a.ts"]) }, owned("docs: draft"));
+        commit(root, { "src/a.ts": "a\n" }, owned("feat: write a early"));
+        commit(root, { [ACTIVE_PLAN]: plan(CHANGE_ID, "approved", ["src/a.ts"]) }, owned("docs: approve"));
+      },
+    },
+    {
+      code: "scope.approved-plan-mutated",
+      file: ACTIVE_PLAN,
+      build(root) {
+        approve(root, ["src/a.ts"]);
+        commit(root, { [ACTIVE_PLAN]: plan(CHANGE_ID, "approved", ["src/a.ts"], { target: "<MustVerify><Module>M-SECOND</Module></MustVerify>" }) }, owned("docs: edit gate"));
+      },
+    },
+    {
+      code: "scope.approval-uncommitted",
+      file: ACTIVE_PLAN,
+      build(root) {
+        commit(root, { [ACTIVE_SPEC]: spec(CHANGE_ID, "approved"), [ACTIVE_PLAN]: plan(CHANGE_ID, "draft", ["src/a.ts"]) }, owned("docs: draft"));
+        // Approved only in the working tree. The bundle is exempt from the clean-tree check, so the history check must catch it.
+        writeFileSync(path.join(root, ...ACTIVE_PLAN.split("/")), plan(CHANGE_ID, "approved", ["src/a.ts"]));
+      },
+    },
+    {
+      code: "scope.no-owned-commits",
+      file: ACTIVE_PLAN,
+      build(root) {
+        commit(root, { ".grace-lint.json": `{ "requireChangeTrailers": true }\n` }, "chore: require trailers");
+        commit(root, { [ACTIVE_SPEC]: spec(CHANGE_ID, "approved"), [ACTIVE_PLAN]: plan(CHANGE_ID, "approved", ["src/a.ts"]) }, "docs: approve without a trailer");
+        commit(root, { "src/a.ts": "a\n" }, "feat: write a without a trailer");
+      },
+    },
+  ];
+
+  for (const refusal of refusalCases) {
+    it(`refuses on ${refusal.code} before the first write`, async () => {
+      const root = seededProject();
+      refusal.build(root);
+      const logRoot = createLogRoot();
+      cleanRunAtHead(logRoot, root);
+      const planBefore = readFileSync(path.join(activeBundle(root), "plan.xml"), "utf8");
+      const specBefore = readFileSync(path.join(activeBundle(root), "spec.xml"), "utf8");
+
+      const error = await archiveChange(root, { changeId: CHANGE_ID, logRoot }).then(() => null, (thrown: unknown) => thrown as Error & { code?: string });
+
+      expect(error).not.toBeNull();
+      expect(error!.code).toBe("precondition-failed");
+      expect(error!.message).toContain(refusal.code);
+      expect(error!.message).toContain(refusal.file);
+      expect(existsSync(archivedBundle(root))).toBe(false);
+      expect(readFileSync(path.join(activeBundle(root), "plan.xml"), "utf8")).toBe(planBefore);
+      expect(readFileSync(path.join(activeBundle(root), "spec.xml"), "utf8")).toBe(specBefore);
+      expect(fixtureGit(root, ["diff", "--cached", "--name-only"])).toBe("");
+    });
+  }
+
+  it("archives with warnings only and carries committedScope in JSON and text", async () => {
+    const root = seededProject();
+    approve(root, ["src/a.ts"]);
+    commit(root, { [ACTIVE_PLAN]: plan(CHANGE_ID, "approved", ["src/a.ts", "tools/t.ts"]) }, owned("docs: widen"));
+    commit(root, { "src/a.ts": "a\n", "tools/t.ts": "t\n" }, owned("feat: write a and t"));
+    commit(root, { [ACTIVE_PLAN]: plan(CHANGE_ID, "approved", ["src/a.ts", "tools/t.ts"], { intent: "Reworded intent." }) }, owned("docs: amend intent"));
+    const logRoot = createLogRoot();
+    cleanRunAtHead(logRoot, root);
+
+    const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot });
+
+    expect(existsSync(archivedBundle(root))).toBe(true);
+    expect(result.committedScope.widenedFar).toEqual(["tools/t.ts"]);
+    expect(result.committedScope.approved).toEqual(["src/a.ts"]);
+    expect(result.committedScope.amendments).toHaveLength(1);
+    expect(result.committedScope.errors).toEqual([]);
+
+    const json = JSON.parse(JSON.stringify(result)) as { committedScope: { widenedFar: string[]; changeId: string } };
+    expect(json.committedScope.changeId).toBe(CHANGE_ID);
+    expect(json.committedScope.widenedFar).toEqual(["tools/t.ts"]);
+
+    const text = formatArchiveText(result);
+    expect(text).toContain("Committed scope");
+    expect(text).toContain("tools/t.ts");
+    expect(text).toMatch(/Next Action[\s\S]*far[\s\S]*amendments[\s\S]*re-approval additions[\s\S]*archive commit body/);
+  });
+
+  it("records a skipped committed-scope check outside git without refusing", async () => {
+    const root = createProject();
+    const logRoot = createLogRoot();
+    writePassingFinalRun(logRoot, root);
+
+    const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot });
+
+    expect(result.committedScope.skipped).toBe("not-git");
+    expect(formatArchiveText(result)).toContain("skipped");
+  });
+
+  it("does not refuse a missing owned commit when requireChangeTrailers is off", async () => {
+    const root = seededProject();
+    commit(root, { [ACTIVE_SPEC]: spec(CHANGE_ID, "approved"), [ACTIVE_PLAN]: plan(CHANGE_ID, "approved", ["src/a.ts"]) }, "docs: approve without a trailer");
+    const logRoot = createLogRoot();
+    cleanRunAtHead(logRoot, root);
+
+    const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot });
+
+    expect(result.committedScope.ownedCommits).toBe(0);
+  });
+
+  it("passes the project's committedScopeExempt globs to the check", async () => {
+    const root = seededProject({ ".grace-lint.json": `{ "committedScopeExempt": [".beads/**"] }\n` });
+    approve(root, ["src/a.ts"]);
+    commit(root, { ".beads/issues.jsonl": "1\n", "src/a.ts": "a\n" }, owned("feat: write a and bookkeeping"));
+    const logRoot = createLogRoot();
+    cleanRunAtHead(logRoot, root);
+
+    const result = await archiveChange(root, { changeId: CHANGE_ID, logRoot });
+
+    expect(result.committedScope.exempt).toEqual([".beads/issues.jsonl"]);
+    expect(result.committedScope.errors).toEqual([]);
   });
 });

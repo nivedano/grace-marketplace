@@ -4,7 +4,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import path from "node:path";
 import { defineCommand, type CommandDef, runMain } from "citty";
 
+import { committedScopeExemptGlobs, loadGraceLintConfig } from "../lint/config";
 import { GraceCommandError, runGraceCommand } from "../query/errors";
+import { checkCommittedScope, type CommittedScopeReport } from "./committed-scope";
 import { detectGraceProjectKind, resolveGrace4Paths } from "./project";
 import { projectSlug, resolveLogRoot } from "./run-log-store";
 import { ANCHOR_PATTERNS } from "./types";
@@ -61,6 +63,8 @@ export type ArchiveResult = {
   from: string;
   to: string;
   evidence: ArchiveEvidence;
+  /** Committed-scope report for the change; the archive proceeds only when it holds no error. */
+  committedScope: CommittedScopeReport;
   statusFlips: ArchiveStatusFlip[];
   moveMode: "git" | "filesystem";
   /** True when the rename and the flipped content were staged. The archive never commits. */
@@ -362,8 +366,34 @@ function inspectGitContext(root: string, bundleRelative: string, archiveRelative
   return { available: true, tracked: isTracked };
 }
 
+/** Cap on the issues named in a committed-scope refusal; the rest are counted. */
+const REFUSAL_ISSUE_CAP = 10;
+
 /**
- * Archives one active change bundle: verifies a passing final run, refuses a dirty index, flips
+ * Runs the committed-scope check with the project's lint configuration and refuses on any error-severity
+ * issue. Warnings never refuse; their facts stay in the returned report.
+ */
+function requireCommittedScope(root: string, changeId: string): CommittedScopeReport {
+  const { config } = loadGraceLintConfig(root);
+  const { issues, report } = checkCommittedScope(root, changeId, {
+    requireChangeTrailers: config?.requireChangeTrailers ?? false,
+    exempt: committedScopeExemptGlobs(config),
+  });
+  const errors = issues.filter((entry) => entry.severity === "error");
+  if (errors.length > 0) {
+    const listed = errors.slice(0, REFUSAL_ISSUE_CAP).map((entry) => `${entry.code} ${entry.file}`);
+    const more = errors.length > listed.length ? ` and ${errors.length - listed.length} more` : "";
+    throw refuse(
+      `The committed-scope check for ${changeId} found ${errors.length} error(s): ${listed.join("; ")}${more}. `
+      + "Resolve them in the committed history, then rerun the final gate; nothing was written.",
+    );
+  }
+  return report;
+}
+
+/**
+ * Archives one active change bundle: verifies a passing final run, refuses a dirty index, refuses on
+ * committed-scope errors, flips
  * both root statuses to `applied`, and moves the bundle into .grace/changes/archive. The move is
  * staged when git owns the bundle and is never committed. Every precondition is checked before
  * the first byte is written, and a failed move restores the pre-flip artifact contents.
@@ -416,6 +446,7 @@ export async function archiveChange(projectRoot: string, options: ArchiveOptions
   const evidence = requireFinalRunEvidence(root, options, warnings);
   const git = inspectGitContext(root, bundleRelative, destinationRelative, evidence.headVerified, warnings);
   const useGit = git.available && git.tracked;
+  const committedScope = requireCommittedScope(root, options.changeId);
 
   for (const artifact of pending) {
     writeFileSync(artifact.file, artifact.flipped);
@@ -468,11 +499,31 @@ export async function archiveChange(projectRoot: string, options: ArchiveOptions
     from: bundleRelative,
     to: destinationRelative,
     evidence,
+    committedScope,
     statusFlips: pending.map((artifact) => ({ file: `${destinationRelative}/${path.basename(artifact.file)}`, from: APPROVED_STATUS, to: APPLIED_STATUS })),
     moveMode: useGit ? "git" : "filesystem",
     staged: useGit,
     warnings,
   };
+}
+
+/** Renders the committed-scope report as the `Committed scope` text section. */
+function formatCommittedScope(report: CommittedScopeReport): string[] {
+  if (report.skipped) {
+    return ["Committed scope", `- Check skipped (${report.skipped}); no committed history was classified.`];
+  }
+  const listing = (label: string, entries: string[]) => (entries.length > 0 ? [`- ${label}: ${entries.join(", ")}`] : [`- ${label}: none`]);
+  return [
+    "Committed scope",
+    `- Owned commits: ${report.ownedCommits}`,
+    ...listing("Within approved scope", report.approved),
+    ...listing("Widened near", report.widenedNear),
+    ...listing("Widened far", report.widenedFar),
+    ...listing("Plan amendments", report.amendments.map((entry) => `${entry.commit} (${entry.sections.join(", ")})`)),
+    ...listing("Re-approval additions", report.reapprovalAdded.flatMap((entry) => entry.added.map((added) => `${added} (${entry.commit})`))),
+    ...listing("Exempt", report.exempt),
+    ...(report.untaggedInScope.length > 0 ? [`- Untagged commits in scope: ${report.untaggedInScope.join(", ")}`] : []),
+  ];
 }
 
 /** Renders one archive result as the human-readable report. */
@@ -492,11 +543,18 @@ export function formatArchiveText(result: ArchiveResult): string {
     "",
     "Status Flips",
     ...result.statusFlips.map((flip) => `- ${flip.file}: ${flip.from} -> ${flip.to}`),
+    "",
+    ...formatCommittedScope(result.committedScope),
   ];
   if (result.warnings.length > 0) {
     lines.push("", "Warnings", ...result.warnings.map((warning) => `- ${warning}`));
   }
-  lines.push("", "Next Action", "- Review the staged bundle and commit the archive yourself; grace archive never commits.");
+  lines.push(
+    "",
+    "Next Action",
+    "- Review the staged bundle and commit the archive yourself; grace archive never commits.",
+    "- Quote the far list, the amendments and the re-approval additions above in the archive commit body, or state that there are none.",
+  );
   return lines.join("\n");
 }
 
