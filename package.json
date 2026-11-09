@@ -39,6 +39,7 @@
     "src/verification",
     "!src/**/*.test.ts",
     "!src/grace4/test-fixtures.ts",
+    "!src/grace4/git-fixture.ts",
     "README.md",
     "LICENSE"
   ],
