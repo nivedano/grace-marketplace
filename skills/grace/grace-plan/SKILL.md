@@ -38,6 +38,13 @@ Produce `plan.xml` from `references/change-plan-template.xml` as draft unless th
 - A whole-suite command whose runtime is dominated by substrate startup — containers, databases, browsers, emulators — belongs in an acceptance tier, not in the gate; never declare both a whole-suite command and the file-level commands it already re-runs.
 </command_phase_rules>
 
+<observed_scope_derivation>
+- For every production file the plan writes, look up four kinds of related file: the tests that exercise it, the test doubles and fakes that stand in for it, the files that re-export it, and the composition or registration points that wire it.
+- Add each related file to `ObservedWriteScope`, or leave it out and record a one-line reason in the plan's `IntentSummary`.
+- Prefer exact `File` entries; use a `Glob` only for a test directory the change owns as a whole.
+- Run the lookup with the project's own navigation: `grace module find`, `grace file show`, imports, and search.
+</observed_scope_derivation>
+
 <validation>
 - Active-baseline preflight: `grace lint --path PROJECT --assertions current`
 - Parallel safety: `grace lint --path PROJECT --parallel-preflight`
