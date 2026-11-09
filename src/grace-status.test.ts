@@ -832,9 +832,9 @@ describe("grace status", () => {
     editFile(root, `${bundle}/design-context.xml`, "Initial.", "Edited.");
 
     const result = await collectProjectStatus(root);
-    expect(result.observedDrift.unexplainedFiles).toContain(`${bundle}/design-context.xml`);
-    expect(result.observedDrift.unexplainedFiles).toContain(`${bundle}/spec.xml`);
-    expect(result.observedDrift.unexplainedFiles).toContain(`${bundle}/plan.xml`);
+    // The status-only pair return is a return-pending-commit; the design-context edit is not part of it.
+    expect(result.observedDrift.unexplainedFiles).toEqual([`${bundle}/design-context.xml`]);
+    expect(result.changes.find((change) => change.changeId === "C-DC")!.derivedStates).toContain("return-pending-commit");
   });
 
   it("derives awaiting-approval for a draft pair outside git", async () => {
@@ -845,5 +845,259 @@ describe("grace status", () => {
     const result = await collectProjectStatus(root);
     expect(result.observedDrift.available).toBe(false);
     expect(result.changes.find((change) => change.changeId === "C-NOGIT")!.derivedStates).toContain("awaiting-approval");
+  });
+
+  describe("approval and return moments", () => {
+    const bundleOf = (changeId: string) => `.grace/changes/active/${changeId}`;
+    const statesOf = (result: Awaited<ReturnType<typeof collectProjectStatus>>, changeId: string) =>
+      result.changes.find((change) => change.changeId === changeId)!.derivedStates;
+
+    function draftPairRepo(changeId: string) {
+      const root = createProject();
+      writeMinimalGrace4Project(root);
+      writeChange(root, changeId, { specStatus: "draft", planStatus: "draft" });
+      initGit(root);
+      commitAll(root, "test: draft pair");
+      return root;
+    }
+
+    function approvedPairRepo(changeId: string) {
+      const root = createProject();
+      writeMinimalGrace4Project(root);
+      writeChange(root, changeId, { specStatus: "approved", planStatus: "approved" });
+      initGit(root);
+      commitAll(root, "test: approved pair");
+      return root;
+    }
+
+    const flip = (root: string, changeId: string, file: "spec.xml" | "plan.xml", from: string, to: string) =>
+      editFile(root, `${bundleOf(changeId)}/${file}`, `status="${from}"`, `status="${to}"`);
+
+    it("pair flip yields approval-pending-commit", async () => {
+      const root = draftPairRepo("C-FLIP");
+      flip(root, "C-FLIP", "spec.xml", "draft", "approved");
+      flip(root, "C-FLIP", "plan.xml", "draft", "approved");
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-FLIP");
+      expect(states).toContain("approval-pending-commit");
+      expect(states).not.toContain("approved-contract-drift");
+      expect(states).not.toContain("ready-to-execute");
+      expect(result.derivedStates).not.toContain("unexplained-observed-drift");
+      expect(result.observedDrift.unexplainedFiles).toEqual([]);
+      expect(result.nextAction).toContain("commit the approval");
+      expect(result.nextAction).not.toContain("$grace-execute");
+    });
+
+    it("plan-only flip yields approval-pending-commit", async () => {
+      const root = approvedPairRepo("C-PLANONLY");
+      flip(root, "C-PLANONLY", "plan.xml", "approved", "draft");
+      commitAll(root, "test: return to draft");
+      flip(root, "C-PLANONLY", "plan.xml", "draft", "approved");
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-PLANONLY");
+      expect(states).toContain("approval-pending-commit");
+      expect(states).not.toContain("approved-contract-drift");
+      expect(states).not.toContain("ready-to-execute");
+      expect(result.observedDrift.unexplainedFiles).toEqual([]);
+      expect(result.nextAction).toContain("commit the approval");
+    });
+
+    it("plan flip with an edited approved spec stays approved-contract-drift", async () => {
+      const root = approvedPairRepo("C-EDITSPEC");
+      flip(root, "C-EDITSPEC", "plan.xml", "approved", "draft");
+      commitAll(root, "test: return to draft");
+      flip(root, "C-EDITSPEC", "plan.xml", "draft", "approved");
+      editFile(root, `${bundleOf("C-EDITSPEC")}/spec.xml`, "<Summary>Change.</Summary>", "<Summary>Edited.</Summary>");
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-EDITSPEC");
+      expect(states).toContain("approved-contract-drift");
+      expect(states).not.toContain("approval-pending-commit");
+      expect(result.nextAction).toContain("Hard stop");
+      expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-EDITSPEC")}/spec.xml`);
+    });
+
+    it("pending approval does not explain code in its ObservedWriteScope", async () => {
+      const root = draftPairRepo("C-CODE");
+      flip(root, "C-CODE", "spec.xml", "draft", "approved");
+      flip(root, "C-CODE", "plan.xml", "draft", "approved");
+      writeFileSync(path.join(root, "src/example.ts"), `${readFileSync(path.join(root, "src/example.ts"), "utf8")}// edited\n`);
+
+      const result = await collectProjectStatus(root);
+      expect(statesOf(result, "C-CODE")).toContain("approval-pending-commit");
+      expect(result.observedDrift.unexplainedFiles).toEqual(["src/example.ts"]);
+      expect(result.derivedStates).toContain("unexplained-observed-drift");
+    });
+
+    it("pending approval does not explain durable files outside the bundle", async () => {
+      const root = draftPairRepo("C-DURABLE");
+      flip(root, "C-DURABLE", "spec.xml", "draft", "approved");
+      flip(root, "C-DURABLE", "plan.xml", "draft", "approved");
+      editFile(root, ".grace/graph/main.xml", "Example module.", "Edited module.");
+
+      const result = await collectProjectStatus(root);
+      expect(result.observedDrift.unexplainedFiles).toEqual([".grace/graph/main.xml"]);
+    });
+
+    it("spec-only flip yields half-approval and fails --fail-on errors", async () => {
+      const root = draftPairRepo("C-HALF");
+      flip(root, "C-HALF", "spec.xml", "draft", "approved");
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-HALF");
+      expect(states).toContain("half-approval");
+      expect(states).not.toContain("approval-pending-commit");
+      expect(result.observedDrift.unexplainedFiles).toEqual([]);
+      expect(result.nextAction).toContain("approve spec and plan together, or neither");
+      expect(result.nextAction).toContain("restore the spec to draft");
+
+      const repoRoot = path.resolve(import.meta.dir, "..");
+      const run = (failOn: string) => Bun.spawnSync({
+        cmd: [process.execPath, "./src/grace.ts", "status", "--path", root, "--json", "--fail-on", failOn],
+        cwd: repoRoot,
+        stdout: "pipe",
+        stderr: "pipe",
+      }).exitCode;
+      expect(run("errors")).toBe(1);
+      expect(run("never")).toBe(0);
+    });
+
+    it("keeps the hard stop ahead of half-approval in the next action", async () => {
+      const root = draftPairRepo("C-HALF");
+      writeChange(root, "C-DRIFT", { specStatus: "approved", planStatus: "approved", file: "src/other.ts" });
+      commitAll(root, "test: second change");
+      flip(root, "C-HALF", "spec.xml", "draft", "approved");
+      editFile(root, `${bundleOf("C-DRIFT")}/plan.xml`, "<MustExist><Value>M-EXAMPLE</Value></MustExist>", "<MustExist><Value>src/example.ts</Value></MustExist>");
+
+      const result = await collectProjectStatus(root);
+      expect(statesOf(result, "C-HALF")).toContain("half-approval");
+      expect(statesOf(result, "C-DRIFT")).toContain("approved-contract-drift");
+      expect(result.nextAction).toContain("Hard stop");
+    });
+
+    it("status-only plan return yields return-pending-commit", async () => {
+      const root = approvedPairRepo("C-RETURN");
+      flip(root, "C-RETURN", "plan.xml", "approved", "draft");
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-RETURN");
+      expect(states).toContain("return-pending-commit");
+      expect(states).not.toContain("approved-contract-drift");
+      expect(states).not.toContain("ready-to-execute");
+      expect(result.observedDrift.unexplainedFiles).toEqual([]);
+      expect(result.nextAction).not.toContain("grace-refresh");
+      expect(result.nextAction).toContain("commit the return");
+    });
+
+    it("status-only pair return yields return-pending-commit", async () => {
+      const root = approvedPairRepo("C-PAIRRET");
+      flip(root, "C-PAIRRET", "spec.xml", "approved", "draft");
+      flip(root, "C-PAIRRET", "plan.xml", "approved", "draft");
+
+      const result = await collectProjectStatus(root);
+      expect(statesOf(result, "C-PAIRRET")).toContain("return-pending-commit");
+      expect(result.observedDrift.unexplainedFiles).toEqual([]);
+      expect(result.nextAction).toContain("commit the return");
+    });
+
+    it("return with a content edit stays approved-contract-drift", async () => {
+      const root = approvedPairRepo("C-RETEDIT");
+      flip(root, "C-RETEDIT", "plan.xml", "approved", "draft");
+      editFile(root, `${bundleOf("C-RETEDIT")}/plan.xml`, "<IntentSummary>Apply the change.</IntentSummary>", "<IntentSummary>Edited.</IntentSummary>");
+
+      const result = await collectProjectStatus(root);
+      expect(statesOf(result, "C-RETEDIT")).not.toContain("return-pending-commit");
+      expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETEDIT")}/plan.xml`);
+      expect(result.derivedStates).toContain("unexplained-observed-drift");
+    });
+
+    it("a pair return that edits the spec content is not pending", async () => {
+      const root = approvedPairRepo("C-RETSPEC");
+      flip(root, "C-RETSPEC", "spec.xml", "approved", "draft");
+      flip(root, "C-RETSPEC", "plan.xml", "approved", "draft");
+      editFile(root, `${bundleOf("C-RETSPEC")}/spec.xml`, "<Summary>Change.</Summary>", "<Summary>Edited.</Summary>");
+
+      const result = await collectProjectStatus(root);
+      expect(statesOf(result, "C-RETSPEC")).not.toContain("return-pending-commit");
+      expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETSPEC")}/spec.xml`);
+      expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETSPEC")}/plan.xml`);
+    });
+
+    it("a plan return beside an edited approved spec is not pending", async () => {
+      const root = approvedPairRepo("C-RETEDITSPEC");
+      flip(root, "C-RETEDITSPEC", "plan.xml", "approved", "draft");
+      editFile(root, `${bundleOf("C-RETEDITSPEC")}/spec.xml`, "<Summary>Change.</Summary>", "<Summary>Edited.</Summary>");
+
+      const result = await collectProjectStatus(root);
+      expect(statesOf(result, "C-RETEDITSPEC")).not.toContain("return-pending-commit");
+      expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETEDITSPEC")}/spec.xml`);
+      expect(result.observedDrift.unexplainedFiles).toContain(`${bundleOf("C-RETEDITSPEC")}/plan.xml`);
+    });
+
+    it("treats a CRLF status-only return as return-pending-commit", async () => {
+      const root = approvedPairRepo("C-CRLF");
+      runGit(root, ["config", "core.autocrlf", "false"]);
+      flip(root, "C-CRLF", "plan.xml", "approved", "draft");
+      const planFile = path.join(root, bundleOf("C-CRLF"), "plan.xml");
+      writeFileSync(planFile, readFileSync(planFile, "utf8").replace(/></g, ">\n<").replace(/\r?\n/g, "\r\n"));
+
+      const result = await collectProjectStatus(root);
+      expect(statesOf(result, "C-CRLF")).toContain("return-pending-commit");
+      expect(result.observedDrift.unexplainedFiles).toEqual([]);
+    });
+
+    it("keeps approved-contract-drift for a flip with an uncommitted plan.xml", async () => {
+      const root = createProject();
+      writeMinimalGrace4Project(root);
+      writeChange(root, "C-MIXED", { specStatus: "draft", planStatus: "draft" });
+      initGit(root);
+      runGit(root, ["add", ".", `:(exclude)${bundleOf("C-MIXED")}/plan.xml`]);
+      runGit(root, ["commit", "-m", "test: draft spec only"]);
+      flip(root, "C-MIXED", "spec.xml", "draft", "approved");
+      flip(root, "C-MIXED", "plan.xml", "draft", "approved");
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-MIXED");
+      expect(states).toContain("approved-contract-drift");
+      expect(states).not.toContain("approval-pending-commit");
+      expect(result.nextAction).toContain("Hard stop");
+    });
+
+    it("derives awaiting-approval without git and no pending states", async () => {
+      const root = createProject();
+      writeMinimalGrace4Project(root);
+      writeChange(root, "C-NOGIT", { specStatus: "draft", planStatus: "draft" });
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-NOGIT");
+      expect(states).toContain("awaiting-approval");
+      for (const pending of ["approval-pending-commit", "return-pending-commit", "half-approval"]) {
+        expect(states).not.toContain(pending);
+      }
+    });
+
+    it("derives no pending state in a repository without commits", async () => {
+      const root = createProject();
+      writeMinimalGrace4Project(root);
+      writeChange(root, "C-NOHEAD", { specStatus: "approved", planStatus: "approved" });
+      initGit(root);
+
+      const result = await collectProjectStatus(root);
+      const states = statesOf(result, "C-NOHEAD");
+      for (const pending of ["approval-pending-commit", "return-pending-commit", "half-approval"]) {
+        expect(states).not.toContain(pending);
+      }
+    });
+
+    it("suggests the draft baseline lint with the project root", async () => {
+      const root = createProject();
+      writeMinimalGrace4Project(root);
+      writeChange(root, "C-PAIR", { specStatus: "draft", planStatus: "draft" });
+
+      const result = await collectProjectStatus(root);
+      expect(result.nextAction).toContain("grace lint --path <project-root> --assertions baseline --change C-PAIR --draft");
+    });
   });
 });
