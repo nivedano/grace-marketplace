@@ -137,12 +137,33 @@ describe("GRACE 4 Artifact Grammar", () => {
     expect(resultCodes).toContain("change.plan-missing-section");
   });
 
-  it("rejects active plans created beside non-approved specs", () => {
-    const root = createProject();
-    writeMinimalGrace4Project(root);
-    writeChangeBundleFixture(root, { changeId: "C-DRAFT", location: "active", specStatus: "draft", planStatus: "draft" });
+  describe("plan and spec approval pairing", () => {
+    function pairCodes(specStatus: string, planStatus?: string) {
+      const root = createProject();
+      writeMinimalGrace4Project(root);
+      writeChangeBundleFixture(root, { changeId: "C-PAIR", location: "active", specStatus, planStatus });
+      return codes(validateGrace4Project(root));
+    }
 
-    expect(codes(validateGrace4Project(root))).toContain("change.plan-requires-approved-spec");
+    it("accepts draft spec with draft plan", () => {
+      expect(pairCodes("draft", "draft")).not.toContain("change.plan-requires-approved-spec");
+    });
+
+    it("accepts approved spec with draft plan", () => {
+      expect(pairCodes("approved", "draft")).not.toContain("change.plan-requires-approved-spec");
+    });
+
+    it("accepts approved spec with approved plan", () => {
+      expect(pairCodes("approved", "approved")).not.toContain("change.plan-requires-approved-spec");
+    });
+
+    it("rejects draft spec with approved plan", () => {
+      expect(pairCodes("draft", "approved")).toContain("change.plan-requires-approved-spec");
+    });
+
+    it("accepts draft spec without plan", () => {
+      expect(pairCodes("draft")).not.toContain("change.plan-requires-approved-spec");
+    });
   });
 
   it("reports missing graceVersion, unsupported versions, invalid roots, and malformed XML", () => {

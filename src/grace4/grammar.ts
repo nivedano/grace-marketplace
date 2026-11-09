@@ -548,8 +548,8 @@ function validateChangeBundlesInDirectory(
 
     const specStatus = specArtifact.root?.attributes.status;
     const planStatus = planArtifact?.root?.attributes.status;
-    if (location === "active" && planArtifact && specStatus !== "approved") {
-      bundleIssues.push(issue("error", "change.plan-requires-approved-spec", entryPath, "An active plan may exist only beside an approved spec."));
+    if (location === "active" && planArtifact && planStatus === "approved" && specStatus !== "approved") {
+      bundleIssues.push(issue("error", "change.plan-requires-approved-spec", entryPath, "An approved active plan requires an approved spec."));
     }
     if (location === "archive" && planArtifact && specStatus && planStatus && specStatus !== planStatus) {
       bundleIssues.push(issue("error", "change.archive-status-mismatch", entryPath, `Archived spec status '${specStatus}' must match plan status '${planStatus}'.`));

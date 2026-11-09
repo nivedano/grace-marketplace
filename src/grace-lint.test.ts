@@ -572,6 +572,20 @@ function Publish-Artifacts {
     expect(result.issues.filter((issue) => issue.code === "assertion.MustExist")).toHaveLength(0);
   });
 
+  it("lets a draft plan sit beside a draft spec but not an approved plan", async () => {
+    const root = createProject();
+    writeMinimalGrace4Project(root);
+    writeApprovedChange(root, "C-PAIR", `<MustExist><Value>M-EXAMPLE</Value></MustExist>`, `<MustVerify><Module>M-EXAMPLE</Module></MustVerify>`, "draft");
+    const specPath = path.join(root, ".grace/changes/active/C-PAIR/spec.xml");
+    writeFileSync(specPath, readFileSync(specPath, "utf8").replace('status="approved"', 'status="draft"'));
+
+    expect((await lintGraceProject(root)).issues.map((issue) => issue.code)).not.toContain("change.plan-requires-approved-spec");
+
+    const planPath = path.join(root, ".grace/changes/active/C-PAIR/plan.xml");
+    writeFileSync(planPath, readFileSync(planPath, "utf8").replace('status="draft"', 'status="approved"'));
+    expect((await lintGraceProject(root)).issues.map((issue) => issue.code)).toContain("change.plan-requires-approved-spec");
+  });
+
   it("fails active approved plans with failing BaselineAssertions", async () => {
     const root = createProject();
     writeMinimalGrace4Project(root);
