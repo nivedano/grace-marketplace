@@ -7,6 +7,9 @@ const repoRoot = path.resolve(import.meta.dir, "..");
 const WIDENING_FORMULA =
   "Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`.";
 
+const AMENDMENT_FORMULA =
+  "Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them.";
+
 const SKILL_FILES = [
   "skills/grace/grace-execute/SKILL.md",
   "skills/grace/grace-plan/SKILL.md",
@@ -137,10 +140,83 @@ describe("committed-scope skill contracts", () => {
       "scope.widened-far",
       "scope.untagged-commit",
       "scope.committed-check-skipped",
+      "scope.approved-plan-amended",
     ]) {
       expect(block).toContain(code);
     }
-    expect(block.match(/scope\.[a-z-]+/g)?.filter((code, index, all) => all.indexOf(code) === index)).toHaveLength(11);
+    expect(block.match(/scope\.[a-z-]+/g)?.filter((code, index, all) => all.indexOf(code) === index)).toHaveLength(12);
+  });
+
+  it("states the amendment formula wherever the widening formula appears", () => {
+    const execute = read("skills/grace/grace-execute/SKILL.md");
+    const plan = read("skills/grace/grace-plan/SKILL.md");
+    const cli = read("skills/grace/grace-cli/SKILL.md");
+    const explainer = read("skills/grace/grace-explainer/references/contract-driven-dev.md");
+
+    const statements = [
+      slice(execute, "<preflight>", "</preflight>"),
+      slice(execute, "<mode_selection>", "</mode_selection>"),
+      slice(execute, "<scope_widening>", "</scope_widening>"),
+      slice(execute, "\n8. ", "</execution_rules>"),
+      slice(plan, "<approved_plan_immutability>", "</approved_plan_immutability>"),
+      slice(cli, "<committed_scope_contract>", "</committed_scope_contract>"),
+      slice(explainer, "Approved plans are immutable", "\n\n"),
+    ];
+    for (const statement of statements) {
+      expect(statement).toContain(WIDENING_FORMULA);
+      expect(statement).toContain(AMENDMENT_FORMULA);
+      const gap = statement.indexOf(AMENDMENT_FORMULA) - (statement.indexOf(WIDENING_FORMULA) + WIDENING_FORMULA.length);
+      expect(gap).toBeGreaterThanOrEqual(0);
+      expect(gap).toBeLessThan(120);
+    }
+
+    const wideningBlock = statements[2]!;
+    const supersede = wideningBlock.split("\n").find((line) => line.includes("superseding bundle"));
+    expect(supersede).toContain("`BaselineAssertions`, `TargetAssertions` and `DurableScope`");
+    expect(supersede).not.toContain("tasks");
+
+    const immutability = statements[4]!;
+    const refreshList = immutability.split("\n").find((line) => line.startsWith("- Do not refresh"));
+    expect(refreshList).toContain("DurableScope");
+    expect(refreshList).not.toContain("ObservedWriteScope");
+    expect(refreshList).not.toContain("tasks");
+    expect(immutability).toContain("Create a new `C-*` bundle");
+    expect(immutability).toContain("mark the old bundle superseded");
+
+    const rule8 = statements[3]!;
+    expect(rule8).toContain("Never edit approved assertions");
+    expect(rule8).not.toContain("or tasks in place");
+  });
+
+  it("reviews amendments", () => {
+    const reviewer = read("skills/grace/grace-reviewer/SKILL.md");
+    const block = slice(reviewer, "<scope_widening_review>", "</scope_widening_review>");
+    const line = block.split("\n").find((entry) => entry.includes("`amendments`"));
+    expect(line).toBeDefined();
+    expect(line).toContain("archive commit body");
+    expect(line).toContain("finding");
+    expect(line).toContain("who asked, who agreed, why the plan changed");
+  });
+
+  it("documents the twelfth code, the amendment state and committedScopeExempt", () => {
+    const cli = read("skills/grace/grace-cli/SKILL.md");
+    const block = slice(cli, "<committed_scope_contract>", "</committed_scope_contract>");
+    const warnings = block.slice(block.indexOf("Warnings:"));
+    expect(warnings).toContain("- `scope.approved-plan-amended`");
+    expect(warnings).toContain("`ImplementationPlan`");
+    expect(warnings).toContain("`IntentSummary`");
+    expect(block).toContain("`scope.approved-plan-mutated`: an approved plan changed outside `ObservedWriteScope`");
+    expect(block).toContain("`BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope`");
+    expect(block).toContain("approved-plan-amendment-pending");
+    expect(block).toContain(
+      "Commit the amendment on its own, touching nothing outside .grace/, with the user's agreement in its body.",
+    );
+    expect(block).toContain("approved-scope-widening-pending");
+    expect(block).toContain("approved-contract-drift");
+    expect(block).toContain("committedScopeExempt");
+    expect(block).toContain("`ObservedWriteScope` glob grammar");
+    expect(block).toContain("`exempt`");
+    expect(block).toContain("config.invalid-committed-scope-exempt");
   });
 
   it("keeps the packaged mirrors identical and free of private tooling names", () => {

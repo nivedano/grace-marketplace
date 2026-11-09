@@ -21,9 +21,10 @@ description: Read an approved GRACE 4 GraceChangeSpec and optional design contex
 
 <approved_plan_immutability>
 - If `plan.xml` already exists with status `approved`, stop before writing.
-- Do not refresh `BaselineAssertions`, `TargetAssertions`, `DurableScope`, or tasks in place.
+- Do not refresh `BaselineAssertions`, `TargetAssertions` or `DurableScope` in place.
 - Create a new `C-*` bundle and mark the old bundle superseded with an explicit replacement reference.
 - Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. `grace-execute` defines the procedure.
+- Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them.
 </approved_plan_immutability>
 
 <must_do>

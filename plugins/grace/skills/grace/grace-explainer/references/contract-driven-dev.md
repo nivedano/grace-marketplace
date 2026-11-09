@@ -55,7 +55,7 @@ Requirements (.grace/context/requirements.xml)
 
 Never jump levels. If requirements are unclear — stop and clarify with the user.
 
-Approved plans are immutable execution evidence. If baseline/target assertions, `DurableScope`, tasks, or verification gates need to change after approval, create a replacement `C-*` bundle and mark the old bundle superseded; do not refresh an approved plan in place. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`.
+Approved plans are immutable execution evidence. If baseline/target assertions, `DurableScope`, or verification gates need to change after approval, create a replacement `C-*` bundle and mark the old bundle superseded; do not refresh an approved plan in place. Widen `ObservedWriteScope` of an approved plan only after the user agrees, in a commit that touches only `.grace/`. Amend `ImplementationPlan` tasks or `IntentSummary` of an approved plan only after the user agrees, in a commit that touches only `.grace/`; never place `BaselineAssertions`, `TargetAssertions`, `DurableScope` or `ObservedWriteScope` inside them.
 
 ## Governed Autonomy (PCAM)
 
