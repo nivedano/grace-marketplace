@@ -127,6 +127,22 @@ describe("grace archive", () => {
     await expect(archiveChange(root, { changeId: CHANGE_ID, logRoot })).rejects.toThrow(/recorded status "failed"/);
   });
 
+  it("archive refuses a bundle whose only run is a draft baseline run", async () => {
+    const root = createProject();
+    const logRoot = createLogRoot();
+    writeRun(logRoot, root, "2026-01-01T09-00-00_C-ARCHIVE", {
+      changeId: CHANGE_ID,
+      assertionMode: "baseline",
+      selectedPlanStatus: "draft",
+      status: "passed",
+      startedAt: "2026-01-01T09:00:00.000Z",
+      finishedAt: "2026-01-01T09:01:00.000Z",
+    });
+
+    await expect(archiveChange(root, { changeId: CHANGE_ID, logRoot })).rejects.toThrow(/No final run evidence/);
+    expect(existsSync(activeBundle(root))).toBe(true);
+  });
+
   it("ignores runs recorded for another change or another assertion mode", async () => {
     const root = createProject();
     const logRoot = createLogRoot();

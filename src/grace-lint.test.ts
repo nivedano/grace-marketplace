@@ -1096,6 +1096,7 @@ describe("committed-scope check in final mode", () => {
       "scope.committed-check-skipped",
       "scope.reapproval-changed-gates",
       "scope.committed-check-failed",
+      "scope.reapproval-after-write",
     ];
     const prefixTitle = getLintIssueGuide("scope.unknown-code").title;
     for (const code of codes) {

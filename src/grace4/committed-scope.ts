@@ -425,6 +425,22 @@ function checkOrThrow(root: string, changeId: string, options: CommittedScopeOpt
 
   report.exempt = [...exempt].sort();
 
+  // The re-approval window closes at the first owned commit that writes code; a later re-approval point is an error.
+  const firstCodeIndex = window.findIndex((entry) => ownedHashes.has(entry.hash) && entry.files.some((file) => !isGrace(file) && !isExempt(file)));
+  if (firstCodeIndex >= 0) {
+    const codeCommit = window[firstCodeIndex]!.hash;
+    for (const point of history.approvalPoints.slice(1)) {
+      if ((position.get(point) ?? -1) > firstCodeIndex) {
+        fail(
+          planFile,
+          "scope.reapproval-after-write",
+          point,
+          `Re-approval ${short(point)} of ${changeId} follows ${short(codeCommit)}, an owned commit that writes outside .grace/; re-approval is allowed only before the first such commit.`,
+        );
+      }
+    }
+  }
+
   const untaggedInScope: { commit: WindowCommit; files: string[] }[] = [];
   const untaggedOther: string[] = [];
   for (const entry of window) {

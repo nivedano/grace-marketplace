@@ -120,6 +120,11 @@ const EXACT_GUIDES: Record<string, Omit<LintIssueGuide, "code">> = {
     explanation: "A re-approval of the plan added entries to ObservedWriteScope. The additions were approved together with other plan changes rather than as a separate widening.",
     remediation: ["Confirm the added scope entries are intended.", "Prefer a separate widening commit that touches nothing outside .grace/."],
   },
+  "scope.reapproval-after-write": {
+    title: "Re-approval After A Code Write",
+    explanation: "The plan returned to draft and was approved again after an owned commit that writes outside .grace/ and outside committedScopeExempt. Re-approval is allowed only before the first such commit, so gates and scope may have changed under code already written.",
+    remediation: [COMMITTED_HISTORY_REMEDIATION, "In later changes, once code is committed, widen or amend the approved plan in place with a .grace-only commit, or supersede the bundle."],
+  },
   "scope.widened-far": {
     title: "Widened Scope Far From Approval",
     explanation: "A file admitted by a widening lies far from the scope approved earlier, rather than next to a file or package it already covered.",

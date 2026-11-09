@@ -41,6 +41,19 @@ function writeChange(root: string, changeId: string, options: { graphAnchor: str
 }
 
 describe("GRACE 4 scope detector", () => {
+  it("readActiveChangeScope reads a draft/draft bundle", () => {
+    const root = createProject();
+    writeChange(root, "C-DRAFT", { graphAnchor: "M-DRAFT", file: "src/draft.ts", status: "draft" });
+
+    const scopes = collectActiveChangeScopes(resolveGrace4Paths(root));
+
+    expect(scopes).toHaveLength(1);
+    expect(scopes[0]).toMatchObject({ changeId: "C-DRAFT", specStatus: "draft", planStatus: "draft" });
+    expect(scopes[0]!.durable.graphAnchors).toContain("M-DRAFT");
+    expect(scopes[0]!.observedWrites.files).toContain("src/draft.ts");
+    expect(scopes[0]!.issues).toEqual([]);
+  });
+
   it("collects active change scopes from approved and draft plans", () => {
     const root = createProject();
     writeChange(root, "C-ONE", { graphAnchor: "M-AUTH-SESSION", file: "src/auth.ts", contextArtifact: "requirements.xml" });

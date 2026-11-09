@@ -648,10 +648,100 @@ describe("checkCommittedScope", () => {
       const reapproval = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts", "src/b.ts"]) }, owned("docs: re-approve"));
 
       const { issues, report } = check(root);
-      expect(codes(issues)).toEqual([`warning:scope.reapproval-widened:${ACTIVE_PLAN}`, "error:scope.written-before-widening:src/b.ts"]);
+      expect(codes(issues)).toEqual([
+        `warning:scope.reapproval-widened:${ACTIVE_PLAN}`,
+        "error:scope.written-before-widening:src/b.ts",
+        `error:scope.reapproval-after-write:${ACTIVE_PLAN}`,
+      ]);
       expect(issues[1]!.message).toContain(short(reapproval));
-      expect(report.errors).toEqual([{ file: "src/b.ts", code: "scope.written-before-widening", commit: short(early) }]);
+      expect(report.errors).toEqual([
+        { file: "src/b.ts", code: "scope.written-before-widening", commit: short(early) },
+        { file: ACTIVE_PLAN, code: "scope.reapproval-after-write", commit: short(reapproval) },
+      ]);
       expect(report.approved).toEqual(["src/a.ts"]);
+    });
+
+    it("takes a pair approval commit as the base and ignores draft-loop commits", () => {
+      const root = seeded();
+      const first = commit(root, { [`${ACTIVE}/spec.xml`]: spec(ID, "draft"), [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts"]) }, owned("docs: draft pair"));
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts", "src/b.ts"]) }, owned("docs: refine draft"));
+      const approval = commit(
+        root,
+        { [`${ACTIVE}/spec.xml`]: spec(ID, "approved"), [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts", "src/b.ts"]) },
+        owned("docs: approve spec and plan"),
+      );
+      commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+
+      const { issues, report } = check(root);
+      expect(report.firstCommit).toBe(first);
+      expect(report.approvalCommit).toBe(approval);
+      expect(report.approvalPoints).toEqual([short(approval)]);
+      expect(issues).toEqual([]);
+    });
+
+    it("sees approval, committed return, amendment and re-approval before code as a re-approval point", () => {
+      const { root, approval } = approvedRepo(["src/a.ts"]);
+      const tasks = "<T-001><Title>Reworked</Title></T-001>";
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts"]) }, owned("docs: return plan to draft"));
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts"], { tasks }) }, owned("docs: amend draft"));
+      const reapproval = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { tasks }) }, owned("docs: re-approve"));
+      commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+
+      const { issues, report } = check(root);
+      expect(report.approvalPoints).toEqual([short(approval), short(reapproval)]);
+      expect(report.mutations).toEqual([]);
+      expect(codes(issues)).toEqual([]);
+      expect(report.errors).toEqual([]);
+    });
+
+    it("errors when a re-approval follows an owned code commit", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      const code = commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts"]) }, owned("docs: return plan to draft"));
+      const reapproval = commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"]) }, owned("docs: re-approve"));
+
+      const { issues, report } = check(root);
+      expect(codes(issues)).toEqual([`error:scope.reapproval-after-write:${ACTIVE_PLAN}`]);
+      expect(issues[0]!.message).toContain(short(reapproval));
+      expect(issues[0]!.message).toContain(short(code));
+      expect(report.errors).toEqual([{ file: ACTIVE_PLAN, code: "scope.reapproval-after-write", commit: short(reapproval) }]);
+    });
+
+    it("errors for each re-approval point after the first owned code commit", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      commit(root, { "src/a.ts": "a\n" }, owned("feat: write a"));
+      for (const round of ["one", "two"]) {
+        commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts"], { intent: round }) }, owned(`docs: return ${round}`));
+        commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"], { intent: round }) }, owned(`docs: re-approve ${round}`));
+      }
+
+      expect(codes(check(root).issues)).toEqual([
+        `error:scope.reapproval-after-write:${ACTIVE_PLAN}`,
+        `error:scope.reapproval-after-write:${ACTIVE_PLAN}`,
+      ]);
+    });
+
+    it("does not close the window on an owned exempt-only commit", () => {
+      const { root } = approvedRepo(["src/a.ts"]);
+      commit(root, { ".beads/issues.jsonl": "{}\n" }, owned("chore: track beads"));
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts"]) }, owned("docs: return plan to draft"));
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"]) }, owned("docs: re-approve"));
+
+      const exempted = check(root, { requireChangeTrailers: false, exempt: [".beads/**"] });
+      expect(codes(exempted.issues)).toEqual([]);
+      expect(codes(check(root).issues)).toContain(`error:scope.reapproval-after-write:${ACTIVE_PLAN}`);
+    });
+
+    it("does not close the window without ownership trailers", () => {
+      const root = seeded();
+      commit(root, { [`${ACTIVE}/spec.xml`]: spec(ID, "approved"), [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"]) }, "docs: approve");
+      commit(root, { "src/a.ts": "a\n" }, "feat: write a");
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "draft", ["src/a.ts"]) }, "docs: return plan to draft");
+      commit(root, { [ACTIVE_PLAN]: plan(ID, "approved", ["src/a.ts"]) }, "docs: re-approve");
+
+      const { issues, report } = check(root, { requireChangeTrailers: false });
+      expect(report.ownedCommits).toBe(0);
+      expect(issues.map((issue) => issue.code)).not.toContain("scope.reapproval-after-write");
     });
 
     it("warns with scope.reapproval-changed-gates and lists the differing sections", () => {
