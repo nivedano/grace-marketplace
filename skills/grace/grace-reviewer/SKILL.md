@@ -4,6 +4,12 @@ description: Review GRACE 4 integrity across .grace artifacts, active changes, s
 ---
 
 <skill>
+<scope_widening_review>
+- Read `committedScope` from the final `grace lint` output; it lists files admitted by widening `ObservedWriteScope`.
+- For each `far` file (`widenedFar`) and each re-approval addition (`reapprovalAdded`), record who asked and who agreed, why the plan missed the file, and whether the miss was avoidable.
+- List each such file with its verdict in the archive record, or state that there were none.
+</scope_widening_review>
+
 <review_checklist>
 - `.grace/context` artifacts are present and relevant.
 - `.grace/graph/index.xml` routes every graph anchor to the correct graph document.

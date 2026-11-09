@@ -25,6 +25,25 @@ description: Operate the GRACE 4 CLI for .grace linting, status, module navigati
 Lint, status, and navigation commands validate before returning records. JSON argument/runtime failures are one `{ "schemaVersion": "1.0.0", "ok": false, "error": { ... } }` object on stdout. Text failures are one concise actionable line with a nonzero exit code and no stack trace.
 </failure_contract>
 
+<committed_scope_contract>
+`--change C-ID --assertions final` also runs the committed-scope check and adds a `committedScope` section to the text and JSON report. The check classifies each commit made since the plan's first commit against the `ObservedWriteScope` of the approved plan. Other assertion modes skip it.
+Errors:
+- `scope.committed-outside`: a commit carrying the change's `Change` trailer wrote a file outside the final `ObservedWriteScope`.
+- `scope.widening-with-code`: a widening commit that admitted a file also wrote outside `.grace/`.
+- `scope.written-before-widening`: a file was written in the commit that admitted it, or before it.
+- `scope.written-before-approval`: a commit carrying the change's `Change` trailer wrote a file before the plan was approved.
+- `scope.approved-plan-mutated`: an approved plan changed outside `ObservedWriteScope` without a re-approval.
+- `scope.approval-uncommitted`: no commit holds the plan as `approved`; commit the approval first.
+- `scope.no-owned-commits`: the scope is not `<None />` and no commit carries the `Change: <C-ID>` trailer; an error when `requireChangeTrailers` is `true`, otherwise a warning.
+Warnings:
+- `scope.reapproval-widened`: a re-approval added `ObservedWriteScope` entries.
+- `scope.widened-far`: an admitted file lies outside the directories and packages of the approved scope.
+- `scope.untagged-commit`: a commit without a `Change` trailer touched a file in the final scope.
+- `scope.committed-check-skipped`: the project is not a git worktree, or the clone is shallow.
+Set `requireChangeTrailers` (boolean) in `.grace-lint.json`; it defaults to `false`.
+`grace status` derives `approved-scope-widening-pending` for an uncommitted `ObservedWriteScope`-only widening of an approved plan. Commit the widening alone, touching nothing outside `.grace/`, before writing the admitted files.
+</committed_scope_contract>
+
 <runtime_contract>
 TypeScript/JavaScript analysis is bundled. Python and Dart governed files require their runtimes on PATH; missing runtimes fail closed with actionable `analysis.runtime-missing` diagnostics instead of silently dropping parity checks.
 </runtime_contract>
